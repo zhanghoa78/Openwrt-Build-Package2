@@ -1,49 +1,46 @@
-name: Build LuCI TCPDump IPK
+name: Build IPK with ImmortalWrt 23.05.7 SDK
 
 on:
   push:
     branches:
       - main
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch: # 允许手动点击 "Run workflow"
 
+env:
+  # 您提供的 SDK 链接
+  SDK_URL: "https://downloads.immortalwrt.org/releases/23.05.7/targets/ramips/mt7620/immortalwrt-sdk-23.05.7-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+  SDK_FILE: "immortalwrt-sdk.tar.xz"
+  
 jobs:
-  build:
+  build-ipk:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout OpenWrt source
-        uses: actions/checkout@v3
-        with:
-          repository: openwrt/openwrt # 您可以换成 immortalwrt/immortalwrt
-          ref: main                    # 您可以换成 23.05 或其他分支
-          path: openwrt
-
-      - name: Checkout luci-app-tcpdump source
-        uses: actions/checkout@v3
-        with:
-          # 检出当前仓库（即 luci-app-tcpdump）
-          path: openwrt/package/luci-app-tcpdump
-
-      - name: Install feeds
+      - name: Download and Extract SDK
         run: |
-          cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          wget -O $SDK_FILE "$SDK_URL"
+          tar -xJvf $SDK_FILE
+          # 找到解压后的 SDK 目录名
+          SDK_DIR=$(ls -d */ | grep 'immortalwrt-sdk')
+          echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
 
-      - name: Configure build
-        run: |
-          cd openwrt
-          make defconfig
-          
+      - name: Checkout package source
+        uses: actions/checkout@v4
+        with:
+          # 将您的 luci-app-tcpdump 仓库代码
+          # 检出到 SDK 的 package/luci-app-tcpdump 目录中
+          path: ${{ env.SDK_DIR }}/package/luci-app-tcpdump
+
       - name: Compile the package
         run: |
-          cd openwrt
-          # V=s 打印详细日志
+          cd ${{ env.SDK_DIR }}
+          # 运行 SDK 的 make 命令来编译您的包
           make package/luci-app-tcpdump/compile V=s
 
       - name: Upload IPK artifact
         uses: actions/upload-artifact@v3
         with:
-          name: luci-app-tcpdump-ipk
-          # 编译好的 ipk 会在这里
-          path: openwrt/bin/packages/*/luci/luci-app-tcpdump_*.ipk
+          name: luci-app-tcpdump-ipk-ramips
+          path: |
+            ${{ env.SDK_DIR }}/bin/packages/mipsel_24kec_dsp/luci/luci-app-tcpdump_*.ipk
+            ${{ env.SDK_DIR }}/bin/packages/mipsel_24kec_dsp/base/tcpdump_*.ipk
