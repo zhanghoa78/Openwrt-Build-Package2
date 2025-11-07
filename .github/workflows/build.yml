@@ -34,11 +34,17 @@ jobs:
       - name: Compile the package
         run: |
           cd ${{ env.SDK_DIR }}
-          # 运行 SDK 的 make 命令来编译您的包
+          
+          # ✅ 修正：
+          # 在编译前运行 'make defconfig' 来自动生成一个 .config 文件
+          # 这可以防止系统尝试以交互方式运行 'menuconfig'
+          make defconfig
+          
+          # 现在再运行编译命令，它会找到 .config 并正常工作
           make package/luci-app-tcpdump/compile V=s
 
       - name: Upload IPK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4  
         with:
           name: luci-app-tcpdump-ipk-ramips
           path: |
