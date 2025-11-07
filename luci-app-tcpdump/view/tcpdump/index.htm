@@ -18,14 +18,8 @@
         'require ui';
         'require network';
 
-        //
-        // LuCI JS 前端 for tcpdump
-        //
-
-        // ✅ 修正：RPC 调用路径必须匹配后端注册路径
-        // object 必须是 'luci.tcpdump' (对应 controller/tcpdump.lua)
-        // method 必须是 'start', 'stop', 'status' (对应 lua 中返回的键)
-        
+        // ✅ 最终正确版：
+        // object 必须是 'luci.tcpdump' 才能匹配 controller/tcpdump.lua
         var callTcpdumpStart = rpc.declare({
             object: 'luci.tcpdump',
             method: 'start',
