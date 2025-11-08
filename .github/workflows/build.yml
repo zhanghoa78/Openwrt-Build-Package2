@@ -39,10 +39,10 @@ jobs:
           mv "$SDK_DIR" sdk
           echo "✅ SDK 解压到：sdk/"
 
-          # 复制插件到 SDK
-          mkdir -p sdk/package/custom
-          cp -r ${{ env.PACKAGE_NAME }} sdk/package/custom/
-          echo "✅ 插件已复制到：sdk/package/custom/${{ env.PACKAGE_NAME }}/"
+          # 复制插件到 SDK - 关键：使用正确的路径
+          mkdir -p sdk/package/feeds/luci
+          cp -r ${{ env.PACKAGE_NAME }} sdk/package/feeds/luci/
+          echo "✅ 插件已复制到：sdk/package/feeds/luci/${{ env.PACKAGE_NAME }}/"
 
       # 步骤 3：安装编译依赖
       - name: 🔧 安装编译依赖
@@ -53,12 +53,12 @@ jobs:
             python3 python3-dev python3-pip python3-setuptools python3-wheel unzip \
             wget xz-utils zlib1g-dev rsync
 
-      # 步骤 4：更新 feeds
+      # 步骤 4：更新 feeds - 关键：先更新 luci feed
       - name: 🔄 更新 feeds
         working-directory: ./sdk
         run: |
           echo "🔄 正在更新软件包源..."
-          ./scripts/feeds update -a
+          ./scripts/feeds update luci
           ./scripts/feeds install -a
 
       # 步骤 5：配置编译选项
@@ -81,15 +81,26 @@ jobs:
           make defconfig
           echo "✅ 配置完成"
 
-      # 步骤 6：编译插件 - 修复：移除不存在的 check 目标
+      # 步骤 6：调试步骤 - 检查包是否存在
+      - name: 🔍 调试：检查包结构
+        working-directory: ./sdk
+        run: |
+          echo "🔍 检查包目录结构..."
+          find . -name "*tcpdump*" -type d | head -20
+          echo "🔍 检查 feeds 状态..."
+          ./scripts/feeds list | grep tcpdump || echo "未在 feeds 中找到"
+          echo "🔍 检查包文件..."
+          ls -la package/feeds/luci/${{ env.PACKAGE_NAME }}/ || echo "包目录不存在"
+
+      # 步骤 7：编译插件 - 使用正确的目标路径
       - name: 🛠️ 编译插件
         working-directory: ./sdk
         run: |
           echo "🛠️ 开始编译插件：${{ env.PACKAGE_NAME }}"
-          # 直接编译，跳过不存在的 check 目标
-          make package/custom/${{ env.PACKAGE_NAME }}/compile V=s
+          # 使用 feeds 路径编译
+          make package/feeds/luci/${{ env.PACKAGE_NAME }}/compile V=s
 
-      # 步骤 7：收集并上传 IPK 文件
+      # 步骤 8：收集并上传 IPK 文件
       - name: 📤 上传 IPK 文件
         uses: actions/upload-artifact@v4
         with:
@@ -100,7 +111,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # 步骤 8：显示编译结果摘要
+      # 步骤 9：显示编译结果摘要
       - name: 📋 编译结果摘要
         run: |
           echo "🎉 编译完成！"
