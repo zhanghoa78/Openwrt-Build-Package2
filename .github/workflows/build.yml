@@ -1,4 +1,4 @@
-name: 🛠️ 编译 luci-app-tcpdump (输入 SDK 链接)
+name: 🛠️ 编译 luci-app-tcpdump
 
 on:
   workflow_dispatch:
@@ -28,11 +28,9 @@ jobs:
         run: |
           echo "📥 正在下载 SDK：$SDK_URL"
           wget --quiet "$SDK_URL" -O sdk.tar.xz || { echo "❌ SDK 下载失败，请检查链接是否有效！"; exit 1; }
-
           echo "📦 正在解压 SDK..."
           tar -xf sdk.tar.xz
           mv *-sdk-* sdk
-
           # ✅ 根据您的实际目录结构修正：
           # 您的 luci-app-tcpdump 在 plugin/luci-app-tcpdump/
           mkdir -p sdk/package/custom
