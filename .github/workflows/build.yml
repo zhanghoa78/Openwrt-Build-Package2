@@ -61,22 +61,20 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 步骤 5：配置编译选项
+      # 步骤 5：配置编译选项 - 修复 heredoc 语法
       - name: ⚙️ 配置编译选项
         working-directory: ./sdk
         run: |
           # 生成默认配置
           make defconfig
           
-          # 添加必要的包配置
-          cat >> .config << 'EOF'
-CONFIG_PACKAGE_luci=y
-CONFIG_PACKAGE_luci-base=y
-CONFIG_PACKAGE_luci-lib-nixio=y
-CONFIG_PACKAGE_luci-mod-rpc=y
-CONFIG_PACKAGE_tcpdump=y
-CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m
-EOF
+          # 使用多个 echo 命令代替 heredoc
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+          echo "CONFIG_PACKAGE_luci-base=y" >> .config
+          echo "CONFIG_PACKAGE_luci-lib-nixio=y" >> .config
+          echo "CONFIG_PACKAGE_luci-mod-rpc=y" >> .config
+          echo "CONFIG_PACKAGE_tcpdump=y" >> .config
+          echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m" >> .config
           
           # 让系统自动解析依赖
           make defconfig
