@@ -1,102 +1,44 @@
-name: 🛠️ 编译 luci-app-tcpdump
+include $(TOPDIR)/rules.mk
 
-on:
-  workflow_dispatch:
-    inputs:
-      sdk_url:
-        description: 'SDK 下载链接（必须是 .tar.xz 格式）'
-        required: true
-        default: 'https://downloads.immortalwrt.org/releases/23.05.7/targets/ramips/mt7620/immortalwrt-sdk-23.05.7-ramips-mt7620_gcc-12.3.0_musl.Linux-x86_64.tar.xz'
+PKG_NAME:=luci-app-tcpdump
+PKG_VERSION:=1.0
+PKG_RELEASE:=1
 
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    env:
-      PACKAGE_NAME: luci-app-tcpdump
+PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
-    steps:
-      # 步骤 1：检出当前仓库代码
-      - name: ⏬ 检出插件代码
-        uses: actions/checkout@v4
-        with:
-          path: plugin
+include $(INCLUDE_DIR)/package.mk
 
-      # 步骤 2：下载并解压 SDK 并复制插件
-      - name: 📥 下载、解压 SDK 并复制插件
-        env:
-          SDK_URL: ${{ github.event.inputs.sdk_url }}
-        run: |
-          echo "📥 正在下载 SDK：$SDK_URL"
-          wget --quiet "$SDK_URL" -O sdk.tar.xz || { echo "❌ SDK 下载失败，请检查链接是否有效！"; exit 1; }
-          echo "📦 正在解压 SDK..."
-          tar -xf sdk.tar.xz
-          mv *-sdk-* sdk
-          
-          # ✅ 直接复制 luci-app-tcpdump 目录到 SDK
-          echo "🔍 检查插件目录结构..."
-          ls -la plugin/
-          
-          # 复制整个 luci-app-tcpdump 目录到 SDK
-          mkdir -p sdk/package/custom
-          cp -r plugin/luci-app-tcpdump sdk/package/custom/
-          
-          echo "✅ 插件已复制到 sdk/package/custom/luci-app-tcpdump/"
-          echo "📁 验证文件结构："
-          find sdk/package/custom/luci-app-tcpdump -type f
+define Package/luci-app-tcpdump
+  SECTION:=luci
+  CATEGORY:=LuCI
+  SUBMENU:=3. Applications
+  TITLE:=TCPDump Web Interface
+  DEPENDS:=+luci-base +tcpdump
+  PKGARCH:=all
+endef
 
-      # 步骤 3：安装编译依赖
-      - name: 🔧 安装编译依赖
-        run: |
-          sudo apt update -qq
-          sudo apt install -y -qq build-essential ccache ecj fastjar file g++ gawk \
-            gettext git libelf-dev libncurses5-dev libssl-dev python3 python3-dev \
-            python3-pip python3-setuptools python3-wheel unzip wget xz-utils zlib1g-dev
+define Package/luci-app-tcpdump/description
+  A simple web interface for tcpdump packet capture.
+endef
 
-      # 步骤 4：更新 feeds
-      - name: 🔄 更新 feeds
-        working-directory: ./sdk
-        run: |
-          echo "🔄 正在更新软件包源..."
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+define Build/Configure
+endef
 
-      # 步骤 5：生成配置
-      - name: ⚙️ 生成非交互式配置
-        working-directory: ./sdk
-        run: |
-          make defconfig
-          echo "CONFIG_PACKAGE_luci=y" >> .config
-          echo "CONFIG_PACKAGE_luci-base=y" >> .config
-          echo "CONFIG_PACKAGE_luci-lib-nixio=y" >> .config
-          echo "CONFIG_PACKAGE_luci-mod-rpc=y" >> .config
-          echo "CONFIG_PACKAGE_tcpdump=y" >> .config
-          echo "CONFIG_PACKAGE_libpcap=y" >> .config
-          echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m" >> .config
-          make defconfig
-          echo "✅ 非交互式配置已生成"
+define Build/Compile
+endef
 
-      # 步骤 6：编译插件
-      - name: 🛠️ 编译插件
-        working-directory: ./sdk
-        run: |
-          echo "🛠️ 开始编译插件：${{ env.PACKAGE_NAME }}"
-          # 检查包目录和文件
-          echo "🔍 检查包目录结构..."
-          find package/custom/luci-app-tcpdump -type f
-          
-          # 编译特定包
-          make package/custom/${{ env.PACKAGE_NAME }}/compile V=s -j$(nproc)
+define Package/luci-app-tcpdump/install
+	# 安装 LuCI 控制器 - 直接从当前目录安装
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
+	$(INSTALL_DATA) ./usr/lib/lua/luci/controller/tcpdump.lua $(1)/usr/lib/lua/luci/controller/
+	
+	# 安装 LuCI 视图模板 - 直接从当前目录安装
+	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/tcpdump
+	$(INSTALL_DATA) ./usr/lib/lua/luci/view/tcpdump/overview.htm $(1)/usr/lib/lua/luci/view/tcpdump/
+	
+	# 安装静态资源 (CSS) - 直接从当前目录安装
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/tcpdump/assets
+	$(INSTALL_DATA) ./www/luci-static/resources/view/tcpdump/assets/tcpdump.css $(1)/www/luci-static/resources/view/tcpdump/assets/
+endef
 
-      # 步骤 7：上传 IPK 文件
-      - name: 📤 上传 .ipk 文件
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PACKAGE_NAME }}-ipk
-          path: sdk/bin/packages/**/**/*.ipk
-          if-no-files-found: error
-
-      # 步骤 8：显示编译结果
-      - name: 📋 显示编译结果
-        run: |
-          echo "📦 编译完成的 IPK 文件："
-          find sdk/bin/packages -name "*.ipk" -type f
+$(eval $(call BuildPackage,luci-app-tcpdump))
