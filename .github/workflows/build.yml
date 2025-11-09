@@ -32,26 +32,17 @@ jobs:
           tar -xf sdk.tar.xz
           mv *-sdk-* sdk
           
-          # ✅ 关键修改：检查插件目录结构
+          # ✅ 直接复制 luci-app-tcpdump 目录到 SDK
           echo "🔍 检查插件目录结构..."
-          if [ -d "plugin/luci-app-tcpdump" ]; then
-            echo "✅ 找到 plugin/luci-app-tcpdump 目录"
-            ls -la plugin/luci-app-tcpdump/
-          elif [ -d "plugin" ]; then
-            echo "📁 当前 plugin 目录内容:"
-            ls -la plugin/
-            # 如果插件文件直接在 plugin 目录下，创建正确的包结构
-            mkdir -p plugin/luci-app-tcpdump
-            cp -r plugin/* plugin/luci-app-tcpdump/ 2>/dev/null || true
-          else
-            echo "❌ 未找到插件文件"
-            exit 1
-          fi
+          ls -la plugin/
           
-          # 复制插件到 SDK
+          # 复制整个 luci-app-tcpdump 目录到 SDK
           mkdir -p sdk/package/custom
           cp -r plugin/luci-app-tcpdump sdk/package/custom/
+          
           echo "✅ 插件已复制到 sdk/package/custom/luci-app-tcpdump/"
+          echo "📁 验证文件结构："
+          find sdk/package/custom/luci-app-tcpdump -type f
 
       # 步骤 3：安装编译依赖
       - name: 🔧 安装编译依赖
@@ -89,9 +80,9 @@ jobs:
         working-directory: ./sdk
         run: |
           echo "🛠️ 开始编译插件：${{ env.PACKAGE_NAME }}"
-          # 先检查包是否存在
-          echo "🔍 检查包目录..."
-          find package/ -name "${{ env.PACKAGE_NAME }}" -type d
+          # 检查包目录和文件
+          echo "🔍 检查包目录结构..."
+          find package/custom/luci-app-tcpdump -type f
           
           # 编译特定包
           make package/custom/${{ env.PACKAGE_NAME }}/compile V=s -j$(nproc)
