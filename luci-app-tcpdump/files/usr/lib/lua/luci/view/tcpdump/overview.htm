@@ -1,6 +1,5 @@
 <%+header%>
 
-<!-- 引入外部 CSS -->
 <link rel="stylesheet" href="<%=resource%>/view/tcpdump/assets/tcpdump.css" />
 
 <div class="cbi-map">
@@ -10,7 +9,6 @@
 		<%:捕获文件保存在 /tmp/tcpdump.pcap。%>
 	</div>
 
-	<!-- 主设置区域 -->
 	<fieldset class="cbi-section">
 		<legend><%:捕获设置%></legend>
 		
@@ -42,7 +40,12 @@
 				<div class="port-preset-row">
 					<span class="preset-label"><%:快速选择端口:%></span>
 					<div class="port-preset-container">
-						<!-- 端口按钮 (HTML 不变) -->
+						<button class="port-btn" onclick="addPortFilter('80')">HTTP (80)</button>
+						<button class="port-btn" onclick="addPortFilter('443')">HTTPS (443)</button>
+						<button class="port-btn" onclick="addPortFilter('22')">SSH (22)</button>
+						<button class="port-btn" onclick="addPortFilter('53')">DNS (53)</button>
+						<button class="port-btn" onclick="addPortFilter('21')">FTP (21)</button>
+						<button class="port-btn" onclick="addPortFilter('25')">SMTP (25)</button>
 					</div>
 				</div>
 				
@@ -60,13 +63,10 @@
 					<div class="file-size-container">
 						<input type="number" id="filesize" class="cbi-input-text file-size-input" placeholder="10" min="1" max="100" />
 						<span>MB</span>
-						<span id="file-size-display" class="file-size-display" style="display: none;">
-							<span>当前文件大小: </span><span id="current-file-size">0 KB</span>
-						</span>
 					</div>
 				</div>
 				<div class="cbi-value-description">
-					<%:最大文件大小 (1-100MB)，达到限制时自动停止抓包%>
+					<%:达到文件大小限制时，tcpdump 将自动停止。1-100MB。%>
 				</div>
 			</div>
 		</div>
@@ -76,13 +76,12 @@
 			<div class="cbi-value-field">
 				<input type="number" id="count" class="cbi-input-text" placeholder="1000" min="1" max="100000" />
 				<div class="cbi-value-description">
-					<%:捕获指定数量的包后自动停止，留空表示无限制%>
+					<%:捕获指定数量的包后自动停止，留空表示无限制。%>
 				</div>
 			</div>
 		</div>
 	</fieldset>
 
-    <!-- 新增：高级功能区域 -->
     <fieldset class="cbi-section" id="advanced-settings" style="display: none;">
         <legend><%:高级功能%></legend>
         <div class="cbi-value">
@@ -103,36 +102,105 @@
         </div>
     </fieldset>
 
-	<!-- 状态与控制区域 (HTML 不变) -->
 	<fieldset class="cbi-section">
 		<legend><%:状态与控制%></legend>
-		<!-- ... 其他 HTML 元素不变 ... -->
+		<div class="cbi-value">
+			<label class="cbi-value-title"><%:当前状态%></label>
+			<div class="cbi-value-field">
+				<div class="status-container">
+					<span class="status-indicator status-stopped" id="status-light"></span>
+					<span id="status-text"><%:未运行%></span>
+					<div class="file-size-display">
+						<span><%:文件大小: %></span><span id="file-size">0 KB</span>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div class="cbi-value">
+			<div class="cbi-value-field">
+				<div class="control-buttons">
+					<button id="btn-start" class="tcpdump-btn tcpdump-btn-start" onclick="startCapture()">
+						<%:开始捕获%>
+					</button>
+					<button id="btn-stop" class="tcpdump-btn tcpdump-btn-stop" onclick="stopCapture()" disabled>
+						<%:停止捕获%>
+					</button>
+					<button id="btn-download" class="tcpdump-btn tcpdump-btn-download" onclick="downloadCapture()" disabled>
+						<%:下载文件%>
+					</button>
+					<button id="btn-delete" class="tcpdump-btn tcpdump-btn-delete" onclick="deleteCapture()" disabled>
+						<%:删除文件%>
+					</button>
+				</div>
+			</div>
+		</div>
 	</fieldset>
+
+	<div class="dialog-overlay" id="dialog-overlay" onclick="closeAdvancedFilterDialog()"></div>
+	<div class="advanced-filter-dialog" id="advanced-filter-dialog">
+		<span class="close-dialog" onclick="closeAdvancedFilterDialog()">&times;</span>
+		<h3><%:高级过滤器%></h3>
+		<p><%:常用过滤器示例:%></p>
+		<ul>
+			<li>host 192.168.1.1 - <%:捕获特定主机的流量%></li>
+			<li>net 192.168.1.0/24 - <%:捕获特定网络的流量%></li>
+			<li>portrange 80-100 - <%:捕获端口范围的流量%></li>
+			<li>tcp or udp - <%:捕获TCP或UDP流量%></li>
+			<li>src host 192.168.1.1 - <%:源地址过滤%></li>
+			<li>dst host 192.168.1.1 - <%:目标地址过滤%></li>
+		</ul>
+		<p><%:在上方输入框中输入BPF过滤器表达式%></p>
+	</div>
 </div>
 
 <script type="text/javascript">
 //<![CDATA[
-
-// ------------------------------------------------
-// 全局状态和配置
-// ------------------------------------------------
 var tcpdumpState = {
     isUpdating: false,
-    updateInterval: 2000, // 轮询间隔可以稍快一些
-    isAutoStopped: false
+    updateInterval: 2000
 };
 
-// ... 其他辅助函数如 formatFileSize, showNotification, setupPortSelector 等不变 ...
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
 
-// ------------------------------------------------
-// API 调用 (使用 fetch 和 async/await)
-// ------------------------------------------------
-async function apiCall(url, options) {
+function showNotification(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.textContent = message;
+    Object.assign(notification.style, {
+        position: 'fixed',
+        top: '20px',
+        right: '20px',
+        padding: '10px 20px',
+        borderRadius: '4px',
+        color: 'white',
+        zIndex: '10000',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+        animation: 'slideIn 0.3s ease-out'
+    });
+    if (type === 'success') notification.style.backgroundColor = '#28a745';
+    else if (type === 'error') notification.style.backgroundColor = '#dc3545';
+    else notification.style.backgroundColor = '#17a2b8';
+    document.body.appendChild(notification);
+    setTimeout(() => document.body.removeChild(notification), 3000);
+}
+
+async function apiCall(url, options = {}) {
     try {
-        const response = await fetch(url, options);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        const defaultOptions = {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        };
+        const finalOptions = Object.assign(defaultOptions, options);
+        const response = await fetch(url, finalOptions);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         return await response.json();
     } catch (error) {
         console.error('API call failed:', error);
@@ -141,42 +209,49 @@ async function apiCall(url, options) {
     }
 }
 
-// ------------------------------------------------
-// 状态管理
-// ------------------------------------------------
+async function loadInterfaces() {
+    const select = document.getElementById('interface');
+    select.innerHTML = '<option value=""><%:正在加载接口...%></option>';
+    const data = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "interfaces")%>');
+    if (data && Array.isArray(data)) {
+        select.innerHTML = '';
+        data.forEach(iface => {
+            const option = document.createElement('option');
+            option.value = iface;
+            option.textContent = iface;
+            select.appendChild(option);
+        });
+    } else {
+        select.innerHTML = '<option value=""><%:加载接口失败%></option>';
+    }
+}
+
+function refreshInterfaces() { loadInterfaces(); }
+
 async function updateStatus() {
     if (tcpdumpState.isUpdating) return;
     tcpdumpState.isUpdating = true;
-
-    const data = await apiCall('<%=url("admin/services/tcpdump/status")%>');
-    
+    const data = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "status")%>');
     if (data) {
         updateUI(data);
-        // 如果后端检测到大小限制并自动停止
-        if (data.size_limit_reached && !tcpdumpState.isAutoStopped) {
-            tcpdumpState.isAutoStopped = true;
-            showNotification('已达到文件大小限制，抓包已自动停止', 'info');
-        } else if (!data.running) {
-            tcpdumpState.isAutoStopped = false;
-        }
     }
-    
     tcpdumpState.isUpdating = false;
 }
 
-// ------------------------------------------------
-// UI 更新函数
-// ------------------------------------------------
 function updateUI(data) {
-    // ... 原有的 UI 元素获取逻辑 ...
-    var startBtn = document.getElementById('btn-start');
-    var stopBtn = document.getElementById('btn-stop');
-    var downloadBtn = document.getElementById('btn-download');
-    var deleteBtn = document.getElementById('btn-delete');
-    
-    // ... 原有的状态、进度条等更新逻辑 ...
-    
-    // 更新高级功能区域
+    const statusLight = document.getElementById('status-light');
+    const statusText = document.getElementById('status-text');
+    const fileSizeDisplay = document.getElementById('file-size');
+
+    if (data.running) {
+        statusLight.className = 'status-indicator status-running';
+        statusText.textContent = '<%:正在捕获...%>';
+    } else {
+        statusLight.className = 'status-indicator status-stopped';
+        statusText.textContent = '<%:未运行%>';
+    }
+    fileSizeDisplay.textContent = formatFileSize(data.file_size);
+
     var advancedSettings = document.getElementById('advanced-settings');
     var brouteToggle = document.getElementById('broute-toggle');
     var brouteStatus = document.getElementById('broute-status');
@@ -184,98 +259,125 @@ function updateUI(data) {
     if (data.ebtables_installed) {
         advancedSettings.style.display = 'block';
         brouteToggle.checked = data.broute_enabled;
-        brouteToggle.disabled = data.running; // 运行时禁用切换
+        brouteToggle.disabled = data.running;
         brouteStatus.textContent = data.broute_enabled ? '<%:已开启%>' : '<%:已关闭%>';
         brouteStatus.className = data.broute_enabled ? 'status-running' : 'status-stopped';
     } else {
         advancedSettings.style.display = 'none';
     }
 
-    // 更新按钮状态
-    startBtn.disabled = data.running;
-    stopBtn.disabled = !data.running;
-    downloadBtn.disabled = !data.file_exists || data.running;
-    deleteBtn.disabled = !data.file_exists || data.running;
+    document.getElementById('btn-start').disabled = data.running;
+    document.getElementById('btn-stop').disabled = !data.running;
+    document.getElementById('btn-download').disabled = !data.file_exists || data.running;
+    document.getElementById('btn-delete').disabled = !data.file_exists || data.running;
 }
 
-// ------------------------------------------------
-// 操作函数
-// ------------------------------------------------
+function addPortFilter(port) {
+    const filterInput = document.getElementById('filter');
+    let currentFilter = filterInput.value.trim();
+    if (currentFilter === '') {
+        filterInput.value = `port ${port}`;
+    } else {
+        if (currentFilter.includes('port')) {
+            filterInput.value = `${currentFilter} or port ${port}`;
+        } else {
+            filterInput.value = `${currentFilter} and port ${port}`;
+        }
+    }
+}
+
+function showAdvancedFilterDialog() {
+    document.getElementById('advanced-filter-dialog').style.display = 'block';
+    document.getElementById('dialog-overlay').style.display = 'block';
+}
+
+function closeAdvancedFilterDialog() {
+    document.getElementById('advanced-filter-dialog').style.display = 'none';
+    document.getElementById('dialog-overlay').style.display = 'none';
+}
+
+async function validateInputs() {
+    const iface = document.getElementById('interface').value;
+    if (!iface) {
+        showNotification('<%:请选择网络接口%>', 'error');
+        return false;
+    }
+    const filter = document.getElementById('filter').value;
+    // Simple client-side check, robust check is on the backend
+    if (filter.match(/[;&|`$()]/)) {
+        showNotification('<%:过滤器包含无效字符%>', 'error');
+        return false;
+    }
+    return true;
+}
+
 async function startCapture() {
-    // ... 原有的 validateInputs() 逻辑不变 ...
-    
-    var startBtn = document.getElementById('btn-start');
-    startBtn.disabled = true;
-    startBtn.textContent = '<%:启动中...%>';
+    if (!await validateInputs()) return;
+    var btn = document.getElementById('btn-start');
+    btn.disabled = true;
+    btn.textContent = '<%:启动中...%>';
 
     const formData = new FormData();
     formData.append('interface', document.getElementById('interface').value);
     formData.append('filter', document.getElementById('filter').value);
-    formData.append('filesize', document.getElementById('filesize').value);
-    formData.append('count', document.getElementById('count').value);
+    formData.append('filesize', document.getElementById('filesize').value || '');
+    formData.append('count', document.getElementById('count').value || '');
 
-    const result = await apiCall('<%=url("admin/services/tcpdump/start")%>', {
+    const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "start")%>', {
         method: 'POST',
         body: new URLSearchParams(formData)
     });
 
-    if (result) {
-        showNotification(result.message, result.success ? 'success' : 'error');
-    }
-
-    startBtn.textContent = '<%:开始捕获%>';
-    setTimeout(updateStatus, 500); // 快速更新一次状态
-}
-
-async function stopCapture() {
-    var stopBtn = document.getElementById('btn-stop');
-    stopBtn.disabled = true;
-    stopBtn.textContent = '<%:停止中...%>';
-
-    // 安全措施：停止抓包时，总是尝试关闭桥接流量捕获
-    await toggleBridgeTap(false);
-
-    const result = await apiCall('<%=url("admin/services/tcpdump/stop")%>', { method: 'POST' });
-
-    if (result) {
-        showNotification(result.message, result.success ? 'success' : 'error');
-    }
-    
-    stopBtn.textContent = '<%:停止捕获%>';
+    if (result) showNotification(result.message, result.success ? 'success' : 'error');
+    btn.textContent = '<%:开始捕获%>';
     setTimeout(updateStatus, 500);
 }
 
-// ... downloadCapture 和 deleteCapture 逻辑不变，但可以改为 async/await 风格 ...
-
-// ------------------------------------------------
-// 新增：桥接流量捕获开关
-// ------------------------------------------------
-async function toggleBridgeTap(forceState) {
-    var brouteToggle = document.getElementById('broute-toggle');
-    var enable = (typeof forceState === 'boolean') ? forceState : brouteToggle.checked;
+async function stopCapture() {
+    var btn = document.getElementById('btn-stop');
+    btn.disabled = true;
+    btn.textContent = '<%:停止中...%>';
     
-    brouteToggle.disabled = true;
-
-    const result = await apiCall('<%=url("admin/services/tcpdump/broute")%>?enable=' + enable);
+    // The backend's stop action will handle broute cleanup reliably.
+    const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "stop")%>', { method: 'POST' });
     
-    if (result) {
-        showNotification(result.message, result.success ? 'success' : 'error');
-    }
-    
-    updateStatus(); // 操作后立即更新整体状态
+    if (result) showNotification(result.message, result.success ? 'success' : 'error');
+    btn.textContent = '<%:停止捕获%>';
+    setTimeout(updateStatus, 500);
 }
 
-// ------------------------------------------------
-// 初始化
-// ------------------------------------------------
-document.addEventListener('DOMContentLoaded', function() {
-    // ... 原有的 setupPortSelector, loadInterfaces 等初始化逻辑 ...
-    
-    setInterval(updateStatus, tcpdumpState.updateInterval);
-    
-    // ... 原有的事件监听器 ...
-});
+async function downloadCapture() {
+    // This method is robust for triggering downloads.
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = '<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "download")%>';
+    document.body.appendChild(iframe);
+    setTimeout(() => document.body.removeChild(iframe), 1000);
+}
 
+async function deleteCapture() {
+    if (!confirm('<%:确定要删除捕获文件吗？此操作不可撤销。%>')) return;
+    const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "delete")%>', { method: 'POST' });
+    if (result) showNotification(result.message, result.success ? 'success' : 'error');
+    // After deletion, immediately update status to reflect file non-existence
+    updateStatus();
+}
+
+async function toggleBridgeTap() {
+    var toggle = document.getElementById('broute-toggle');
+    var enable = toggle.checked;
+    toggle.disabled = true;
+    const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "broute")%>?enable=' + enable);
+    if (result) showNotification(result.message, result.success ? 'success' : 'error');
+    // Always call updateStatus to get the authoritative state from backend
+    updateStatus();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadInterfaces();
+    updateStatus(); // Initial status check
+    setInterval(updateStatus, tcpdumpState.updateInterval);
+});
 //]]>
 </script>
 
