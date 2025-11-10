@@ -1,152 +1,218 @@
--- tcpdump.lua - Advanced and Robust LuCI controller for tcpdump
--- Final Version: Implements robust process identification via command-line signature,
--- removing the unreliable PID file dependency and ensuring safe process termination.
+-- tcpdump.lua - 版本 2.2: 稳定、健壮且易于维护的 LuCI tcpdump 控制器。
+-- 本版本将 ebtables 管理逻辑作为内嵌模块集成，实现了单文件部署的便利性，
+-- 同时通过逻辑分区保持了代码的结构化和清晰度。
 
 module("luci.controller.admin.services.tcpdump", package.seeall)
 
+-- 引入所有必要的 LuCI 和 Nixio 库
 local sys = require "luci.sys"
 local http = require "luci.http"
 local util = require "luci.util"
 local fs = require "nixio.fs"
 
--- Configuration constants
+-- ========================== 配置常量 ========================== --
+-- 定义抓包文件的存储路径
 local PCAP_FILE = "/tmp/tcpdump.pcap"
--- This is our unique process signature. We use it to find the correct process.
+-- 定义一个唯一的进程签名，用于在进程列表中准确地找到我们的 tcpdump 实例。
+-- 这是识别进程最可靠的方式，避免了使用 PID 文件可能带来的问题。
 local PROCESS_SIGNATURE = "tcpdump -w " .. PCAP_FILE
+-- ============================================================= --
 
+
+-- ========================================================================= --
+-- [内嵌模块] EBTABLES 管理器                                                --
+-- ------------------------------------------------------------------------- --
+-- 将所有 ebtables 相关的操作封装在这个局部表 (table) 中。                   --
+-- 这样做可以实现逻辑上的分离，使得代码更整洁、更易于维护。                  --
+-- ========================================================================= --
+local EbtablesManager = {}
+
+do -- 使用 do...end 块创建一个独立的作用域，防止内部变量污染外部环境
+    
+    -- 定义需要管理的 ebtables 规则集。
+    -- 将规则集中定义在这里，未来修改或增加规则时，只需改动此处。
+    local EBTABLES_RULES = {
+        -- 规则 1: 豁免 IPTV 组播流量。
+        -- 对于目的地址为 224.0.0.0/4 (IPv4 组播地址范围) 的 UDP 报文，直接 ACCEPT，
+        -- 不将其重定向到 CPU，从而保证 IPTV 等服务的正常运行。
+        "ebtables -t broute -A BROUTING -p ipv4 --ip-proto udp --ip-dst 224.0.0.0/4 -j ACCEPT",
+        
+        -- 规则 2: 重定向所有其他流量以进行捕获。
+        -- 将所有通过网桥的二层流量重定向到三层协议栈 (redirect)，并指定 DROP 目标。
+        -- 这会强制内核处理这些报文，从而让 tcpdump 能够捕获到它们。
+        "ebtables -t broute -A BROUTING -j redirect --redirect-target DROP"
+    }
+
+    -- "私有"函数：清空 BROUTING 链。
+    -- 在添加新规则之前调用此函数，可以确保链是干净的，避免规则重复或冲突。
+    local function clear_brouting_chain()
+        -- -F 参数表示 flush (清空) 指定的链。错误输出重定向到 /dev/null 以保持静默。
+        sys.call("ebtables -t broute -F BROUTING >/dev/null 2>&1")
+    end
+
+    ---
+    -- 检查我们的 brouting 规则是否处于激活状态。
+    -- @return boolean: 如果规则已激活，返回 true，否则返回 false。
+    ---
+    function EbtablesManager.is_active()
+        -- 通过检查关键的 'redirect' 规则是否存在来判断功能是否开启。
+        -- `grep -q` 参数使其在找到匹配项后立即以成功状态 (0) 退出，且不产生任何输出，效率很高。
+        local check_cmd = "ebtables -t broute -L BROUTING | grep -- '-j redirect --redirect-target DROP' -q"
+        return (sys.call(check_cmd) == 0)
+    end
+
+    ---
+    -- 激活 brouting 规则集。
+    -- 该操作是幂等的：多次调用会得到相同的结果。
+    ---
+    function EbtablesManager.start()
+        clear_brouting_chain() -- 先清空，确保状态一致
+        for _, rule in ipairs(EBTABLES_RULES) do
+            sys.call(rule) -- 依次添加规则列表中的所有规则
+        end
+        return true
+    end
+
+    ---
+    -- 停用 brouting 规则集。
+    -- 通过清空整个链来达到停用效果，简单可靠。
+    ---
+    function EbtablesManager.stop()
+        clear_brouting_chain()
+        return true
+    end
+end
+-- ===================== EBTABLES 管理器模块结束 ====================== --
+
+
+-- LuCI 菜单和页面入口点定义
 function index()
+    -- 定义在 "服务" 菜单下的 "TCPDump" 条目
     entry({"admin", "services", "tcpdump"}, view("admin_services/tcpdump"), _("TCPDump"), 70).dependent = true
     
-    -- API endpoints for the modern frontend
-    entry({"admin", "services", "tcpdump", "interfaces"}, call("action_interfaces"))
-    entry({"admin", "services", "tcpdump", "status"}, call("action_status"))
-    entry({"admin", "services", "tcpdump", "start"}, call("action_start"))
-    entry({"admin", "services", "tcpdump", "stop"}, call("action_stop"))
-    entry({"admin", "services", "tcpdump", "download"}, call("action_download"))
-    entry({"admin", "services", "tcpdump", "delete"}, call("action_delete"))
-    entry({"admin", "services", "tcpdump", "broute"}, call("action_broute"))
+    -- 定义所有后端 API 的入口点，供前端 JavaScript 调用
+    entry({"admin", "services", "tcpdump", "interfaces"}, call("action_interfaces")) -- 获取网络接口列表
+    entry({"admin", "services", "tcpdump", "status"}, call("action_status"))       -- 获取当前状态
+    entry({"admin", "services", "tcpdump", "start"}, call("action_start"))         -- 开始抓包
+    entry({"admin", "services", "tcpdump", "stop"}, call("action_stop"))           -- 停止抓包
+    entry({"admin", "services", "tcpdump", "download"}, call("action_download"))   -- 下载抓包文件
+    entry({"admin", "services", "tcpdump", "delete"}, call("action_delete"))       -- 删除抓包文件
+    entry({"admin", "services", "tcpdump", "broute"}, call("action_broute"))       -- 开关二层桥接捕获
 end
 
--- [RELIABILITY UPGRADE]
--- Get PID by scanning the process list for our unique signature in real-time.
--- This is the robust replacement for the stale PID file method.
+---
+-- 通过扫描系统进程列表来获取 tcpdump 的进程 ID (PID)。
+-- 这是比依赖 PID 文件更可靠的方法。
+-- @return string or nil: 如果找到进程，返回 PID 字符串；否则返回 nil。
+---
 local function get_pid_by_signature()
-    -- Command breakdown:
-    -- 1. `ps`: List all processes. In some busybox versions, 'ps w' provides wider output.
-    -- 2. `grep "%s"`: Find the line containing our unique signature.
-    -- 3. `grep -v 'grep'`: Exclude the grep process itself from the results.
-    -- 4. `awk '{print $1}'`: Print the first column, which is the PID.
+    -- 命令解析:
+    -- 1. `ps w`: 列出所有进程，并显示完整命令 (w 参数防止长命令被截断)。
+    -- 2. `grep '%s'`: 查找包含我们唯一签名 (PROCESS_SIGNATURE) 的行。
+    -- 3. `grep -v 'grep'`: 排除 grep 命令自身，防止误判。
+    -- 4. `awk '{print $1}'`: 提取第一列，即进程的 PID。
     local cmd = string.format("ps w | grep '%s' | grep -v 'grep' | awk '{print $1}'", PROCESS_SIGNATURE)
-    local pid = util.trim(sys.exec(cmd))
+    local pid = util.trim(sys.exec(cmd)) -- 执行命令并去除结果中的首尾空格
     
-    -- Return the PID only if it's a valid number, otherwise return nil.
+    -- 确保返回的是一个有效的数字 PID
     if pid and tonumber(pid) then
         return pid
     end
     return nil
 end
 
--- JSON response helper
+-- 辅助函数：以 JSON 格式向前端返回数据
 local function json_response(data)
     http.prepare_content("application/json")
     http.write_json(data)
 end
 
--- API: Return list of network interfaces
+-- API: 获取系统所有网络接口的列表
 function action_interfaces()
     local interfaces = {}
-    -- Using sys.net.get_interfaces() is more robust than parsing ifconfig
     for _, dev in ipairs(sys.net.get_interfaces()) do
         table.insert(interfaces, dev:name())
     end
     json_response(interfaces)
 end
 
--- API: Return current status of tcpdump
+-- API: 获取 tcpdump 的当前运行状态
 function action_status()
-    -- Now uses the new, reliable PID detection function.
     local pid = get_pid_by_signature()
     local file_stat = fs.stat(PCAP_FILE)
     local ebtables_installed = sys.pkg.is_installed("ebtables")
-    local broute_enabled = false
-
-    if ebtables_installed then
-        -- Check if the broute rule exists and is active. The '-q' makes grep silent.
-        local broute_check_cmd = "ebtables -t broute -L FORWARD | grep -- '-p 802_1Q --vlan-encap 0x8100 -j broute --broute-target ACCEPT' -q"
-        broute_enabled = (sys.call(broute_check_cmd) == 0)
-    end
+    
+    -- [集成] 使用内嵌的 EbtablesManager 来获取二层捕获的状态
+    local broute_enabled = ebtables_installed and EbtablesManager.is_active()
     
     json_response({
-        running = (pid ~= nil),
-        pid = pid,
-        file_exists = (file_stat ~= nil),
-        file_size = file_stat and file_stat.size or 0,
-        ebtables_installed = ebtables_installed,
-        broute_enabled = broute_enabled,
+        running = (pid ~= nil), -- 进程是否在运行
+        pid = pid, -- 进程 PID
+        file_exists = (file_stat ~= nil), -- pcap 文件是否存在
+        file_size = file_stat and file_stat.size or 0, -- pcap 文件大小
+        ebtables_installed = ebtables_installed, -- ebtables 是否已安装
+        broute_enabled = broute_enabled, -- 二层桥接捕获是否已开启
     })
 end
 
--- API: Start the tcpdump capture
+-- API: 启动 tcpdump 抓包
 function action_start()
-    -- Check for running process using the new function before starting.
+    -- 检查是否已有实例在运行
     if get_pid_by_signature() then
         return json_response({ success = false, message = "抓包已在运行中。" })
     end
 
-    -- Security validation for all inputs
+    -- 从前端获取参数
     local iface = http.formvalue("interface")
     local filter = http.formvalue("filter") or ""
     local filesize_mb = tonumber(http.formvalue("filesize"))
     local count = tonumber(http.formvalue("count"))
 
-    -- 1. Validate interface exists
-    local iface_valid = false
+    -- [安全校验] 必须对用户输入进行严格校验，防止命令注入
+    -- 1. 校验接口名称是否合法
+    local valid_iface = false
     if iface then
         for _, dev in ipairs(sys.net.get_interfaces()) do
             if dev:name() == iface then
-                iface_valid = true
+                valid_iface = true
                 break
             end
         end
     end
-    if not iface_valid then
+    if not valid_iface then
         return json_response({ success = false, message = "错误：无效的网络接口。" })
     end
-    
-    -- 2. Basic validation for other parameters to prevent command injection
-    if filesize_mb and not (filesize_mb > 0) then filesize_mb = nil end
-    if count and not (count > 0) then count = nil end
-    -- A simple filter validation to prevent shell metacharacters like ; & | ` $ ()
+    -- 2. 校验过滤器是否包含危险字符 (基本防护)
     if filter:match("[;&|`$()]") then
-        return json_response({ success = false, message = "错误：过滤器包含无效字符。" })
+        return json_response({ success = false, message = "错误：过滤器包含禁用字符。" })
     end
 
-    -- Build the command safely
+    -- 构建 tcpdump 命令
     local cmd_parts = {"tcpdump", "-i", iface, "-w", PCAP_FILE}
-    if filesize_mb then
+    if filesize_mb and filesize_mb > 0 then
         table.insert(cmd_parts, "-C")
         table.insert(cmd_parts, tostring(math.floor(filesize_mb)))
         table.insert(cmd_parts, "-W")
-        table.insert(cmd_parts, "1") -- Rotate between 1 file
+        table.insert(cmd_parts, "1") -- 只保留一个滚动文件
     end
-    if count then
+    if count and count > 0 then
         table.insert(cmd_parts, "-c")
         table.insert(cmd_parts, tostring(math.floor(count)))
     end
 
-    -- The command is executed without creating a PID file.
-    -- The '&' at the end runs it in the background.
+    -- 拼接最终命令字符串，并对过滤器内容进行转义，增加安全性
     local full_cmd_str
     if filter and #filter > 0 then
-        -- Safely quote the filter argument
         full_cmd_str = table.concat(cmd_parts, " ") .. " " .. "'" .. filter:gsub("'", "'\\''") .. "'"
     else
         full_cmd_str = table.concat(cmd_parts, " ")
     end
+    
+    -- 在后台执行命令，并将标准输出和错误输出重定向到 /dev/null
     sys.call(full_cmd_str .. " >/dev/null 2>&1 &")
     
-    -- Wait a moment to allow the process to start, then verify it's running.
-    util.nanosleep(500 * 1000 * 1000) -- 500ms
+    -- 短暂等待，然后验证进程是否已成功启动
+    util.nanosleep(500 * 1000 * 1000) -- 暂停 500 毫秒
     if get_pid_by_signature() then
         json_response({ success = true, message = "抓包已成功启动。" })
     else
@@ -154,19 +220,17 @@ function action_start()
     end
 end
 
--- API: Stop the tcpdump capture
+-- API: 停止 tcpdump 抓包
 function action_stop()
-    -- Find the real PID in real-time before killing.
     local pid = get_pid_by_signature()
     if pid then
-        -- Send SIGTERM (15) for a graceful shutdown, allowing tcpdump to flush buffers.
         sys.call("kill " .. pid)
     end
     
-    -- As a safety measure, always try to disable broute on stop
-    sys.call("ebtables -t broute -D FORWARD -p 802_1Q --vlan-encap 0x8100 -j broute --broute-target ACCEPT >/dev/null 2>&1")
+    -- [集成] 停止抓包时，总是调用管理器来清理 ebtables 规则，确保系统恢复干净状态。
+    EbtablesManager.stop()
     
-    -- Wait a moment and verify the process is truly gone.
+    -- 短暂等待，然后验证进程是否已成功停止
     util.nanosleep(500 * 1000 * 1000)
     if not get_pid_by_signature() then
         json_response({ success = true, message = "抓包已成功停止。" })
@@ -175,7 +239,7 @@ function action_stop()
     end
 end
 
--- API: Download the capture file
+-- API: 下载抓包文件
 function action_download()
     if fs.access(PCAP_FILE) then
         http.prepare_content("application/vnd.tcpdump.pcap")
@@ -187,7 +251,7 @@ function action_download()
     end
 end
 
--- API: Delete the capture file
+-- API: 删除抓包文件
 function action_delete()
     if fs.access(PCAP_FILE) then
         fs.unlink(PCAP_FILE)
@@ -197,27 +261,27 @@ function action_delete()
     end
 end
 
--- API: Manage ebtables brouting for layer 2 traffic
+-- API: 开启或关闭二层桥接流量捕获
 function action_broute()
     if not sys.pkg.is_installed("ebtables") then
         return json_response({ success = false, message = "错误：ebtables 未安装。" })
     end
 
     local enable = http.formvalue("enable") == "true"
-    local rule = "-p 802_1Q --vlan-encap 0x8100 -j broute --broute-target ACCEPT"
     
     if enable then
-        -- Check if the rule already exists to avoid duplicates
-        local check_cmd = "ebtables -t broute -L FORWARD | grep -- '-p 802_1Q --vlan-encap 0x8100 -j broute --broute-target ACCEPT' -q"
-        if sys.call(check_cmd) ~= 0 then
-            sys.call("ebtables -t broute -A FORWARD " .. rule)
-            json_response({ success = true, message = "二层桥接流量捕获已开启。" })
+        -- [集成] 调用内嵌管理器的 start 函数来应用规则
+        EbtablesManager.start()
+        
+        -- 操作后进行验证，确保成功
+        if EbtablesManager.is_active() then
+            json_response({ success = true, message = "高级二层捕获规则已成功开启。" })
         else
-            json_response({ success = true, message = "功能已处于开启状态。" })
+            json_response({ success = false, message = "开启规则失败，请检查系统日志。" })
         end
     else
-        -- Deleting the rule is idempotent; no harm if it doesn't exist.
-        sys.call("ebtables -t broute -D FORWARD " .. rule .. " >/dev/null 2>&1")
-        json_response({ success = true, message = "二层桥接流量捕获已关闭。" })
+        -- [集成] 调用内嵌管理器的 stop 函数来清理规则
+        EbtablesManager.stop()
+        json_response({ success = true, message = "高级二层捕获规则已关闭。" })
     end
 end
