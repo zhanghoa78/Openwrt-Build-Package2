@@ -61,4 +61,32 @@
 						<input type="number" id="filesize" class="cbi-input-text file-size-input" placeholder="10" min="1" max="100" />
 						<span>MB</span>
 						<span id="file-size-display" class="file-size-display" style="display: none;">
+							<span>当前文件大小: </span><span id="current-file-size">0 KB</span>
+						</span>
+					</div>
+				</div>
+				<div class="cbi-value-description">
+					<%:最大文件大小 (1-100MB)，达到限制时自动停止抓包%>
+				</div>
+			</div>
+		</div>
+
+		<div class="cbi-value">
+			<label class="cbi-value-title"><%:包数量限制%></label>
+			<div class="cbi-value-field">
+				<input type="number" id="count" class="cbi-input-text" placeholder="1000" min="1" max="100000" />
+				<div class="cbi-value-description">
+					<%:捕获指定数量的包后自动停止，留空表示无限制%>
+				</div>
+			</div>
+		</div>
+	</fieldset>
+
+    <!-- 新增：高级功能区域 -->
+    <fieldset class="cbi-section" id="advanced-settings" style="display: none;">
+        <legend><%:高级功能%></legend>
+        <div class="cbi-value">
+            <label class="cbi-value-title" for="broute-toggle"><%:捕获二层桥接流量%></label>
+            <div class="cbi-value-field">
+                <label class="switch">
 <%+footer%>
