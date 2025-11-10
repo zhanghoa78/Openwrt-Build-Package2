@@ -1,6 +1,16 @@
 <%+header%>
 
-<link rel="stylesheet" href="<%=resource%>/view/tcpdump/assets/tcpdump.css" />
+<style>
+.switch { position: relative; display: inline-block; width: 50px; height: 24px; vertical-align: middle; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+.slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; }
+input:checked + .slider { background-color: #5cb85c; }
+input:focus + .slider { box-shadow: 0 0 1px #2196F3; }
+input:checked + .slider:before { transform: translateX(26px); }
+.slider.round { border-radius: 24px; }
+.slider.round:before { border-radius: 50%; }
+</style>
 
 <div class="cbi-map">
 	<h2 name="content"><%:TCPDump 数据包捕获%></h2>
@@ -15,43 +25,32 @@
 		<div class="cbi-value">
 			<label class="cbi-value-title"><%:网络接口%></label>
 			<div class="cbi-value-field">
-				<div class="interface-row">
-					<select id="interface" class="cbi-input-select interface-select">
-						<option value=""><%:正在加载接口...%></option>
-					</select>
-					<button id="btn-refresh" class="tcpdump-btn tcpdump-btn-reload" onclick="refreshInterfaces()">
-						<%:刷新接口%>
-					</button>
-				</div>
+				<select id="interface" class="cbi-input-select">
+					<option value=""><%:正在加载接口...%></option>
+				</select>
+				<button id="btn-refresh" class="cbi-button cbi-button-neutral" onclick="refreshInterfaces()" style="margin-left: 10px;">
+					<%:刷新%>
+				</button>
 			</div>
 		</div>
 
 		<div class="cbi-value">
 			<label class="cbi-value-title"><%:网络数据过滤器%></label>
 			<div class="cbi-value-field">
-				<div class="filter-input-row">
-					<input type="text" id="filter" class="cbi-input-text filter-input" 
-						   placeholder="输入 BPF 过滤器，例如: port 80 or port 443" />
-					<button type="button" class="tcpdump-btn tcpdump-btn-preset advanced-filter-btn" onclick="showAdvancedFilterDialog()">
-						<%:高级过滤器%>
-					</button>
-				</div>
+				<input type="text" id="filter" class="cbi-input-text" 
+					   placeholder="输入 BPF 过滤器，例如: port 80 or port 443" />
 				
-				<div class="port-preset-row">
-					<span class="preset-label"><%:快速选择端口:%></span>
-					<div class="port-preset-container">
-						<button class="port-btn" onclick="addPortFilter('80')">HTTP (80)</button>
-						<button class="port-btn" onclick="addPortFilter('443')">HTTPS (443)</button>
-						<button class="port-btn" onclick="addPortFilter('22')">SSH (22)</button>
-						<button class="port-btn" onclick="addPortFilter('53')">DNS (53)</button>
-						<button class="port-btn" onclick="addPortFilter('21')">FTP (21)</button>
-						<button class="port-btn" onclick="addPortFilter('25')">SMTP (25)</button>
-					</div>
+                <!-- 修改后的快速选择按钮 -->
+				<div style="margin-top: 10px;">
+					<span style="margin-right: 5px;"><%:快速选择服务:%></span>
+					<button class="cbi-button cbi-button-sm" onclick="setFilter('port 80 or port 443')"><%:网页%></button>
+					<button class="cbi-button cbi-button-sm" onclick="setFilter('port 67 or port 68')"><%:DHCP%></button>
+					<button class="cbi-button cbi-button-sm" onclick="setFilter('port 53')"><%:DNS%></button>
+					<button class="cbi-button cbi-button-sm" onclick="setFilter('port 22')"><%:SSH%></button>
 				</div>
 				
 				<div class="cbi-value-description">
-					<%:使用 BPF 语法，支持多个端口: port 80 or port 443。%><br>
-					<%:留空捕获所有流量。%>
+					<%:使用 BPF 语法。留空捕获所有流量。%>
 				</div>
 			</div>
 		</div>
@@ -59,12 +58,7 @@
 		<div class="cbi-value">
 			<label class="cbi-value-title"><%:文件大小限制 (MB)%></label>
 			<div class="cbi-value-field">
-				<div class="file-size-row">
-					<div class="file-size-container">
-						<input type="number" id="filesize" class="cbi-input-text file-size-input" placeholder="10" min="1" max="100" />
-						<span>MB</span>
-					</div>
-				</div>
+				<input type="number" id="filesize" class="cbi-input-text" placeholder="10" min="1" max="100" style="max-width: 100px;" />
 				<div class="cbi-value-description">
 					<%:达到文件大小限制时，tcpdump 将自动停止。1-100MB。%>
 				</div>
@@ -74,7 +68,7 @@
 		<div class="cbi-value">
 			<label class="cbi-value-title"><%:包数量限制%></label>
 			<div class="cbi-value-field">
-				<input type="number" id="count" class="cbi-input-text" placeholder="1000" min="1" max="100000" />
+				<input type="number" id="count" class="cbi-input-text" placeholder="1000" min="1" max="100000" style="max-width: 100px;" />
 				<div class="cbi-value-description">
 					<%:捕获指定数量的包后自动停止，留空表示无限制。%>
 				</div>
@@ -93,7 +87,7 @@
                 </label>
                 <span id="broute-status" style="margin-left: 10px; vertical-align: middle;"></span>
                 <div class="cbi-value-description">
-                    <%:开启此项可捕获同一网桥下（如 br-lan）各端口之间的通信流量（例如光猫和机顶盒）。%>
+                    <%:开启此项可捕获同一网桥下（如 br-lan）各端口之间的通信流量。%>
                     <br>
                     <strong style="color: #d9534f;"><%:警告：%></strong>
                     <%:此功能会增加 CPU 负载，仅在需要时开启，抓包结束后务必关闭。%>
@@ -107,50 +101,27 @@
 		<div class="cbi-value">
 			<label class="cbi-value-title"><%:当前状态%></label>
 			<div class="cbi-value-field">
-				<div class="status-container">
-					<span class="status-indicator status-stopped" id="status-light"></span>
-					<span id="status-text"><%:未运行%></span>
-					<div class="file-size-display">
-						<span><%:文件大小: %></span><span id="file-size">0 KB</span>
-					</div>
-				</div>
+				<span id="status-text"><%:未运行%></span>
+				<span style="margin-left: 20px;"><%:文件大小: %></span><span id="file-size">0 KB</span>
 			</div>
 		</div>
 		<div class="cbi-value">
 			<div class="cbi-value-field">
-				<div class="control-buttons">
-					<button id="btn-start" class="tcpdump-btn tcpdump-btn-start" onclick="startCapture()">
-						<%:开始捕获%>
-					</button>
-					<button id="btn-stop" class="tcpdump-btn tcpdump-btn-stop" onclick="stopCapture()" disabled>
-						<%:停止捕获%>
-					</button>
-					<button id="btn-download" class="tcpdump-btn tcpdump-btn-download" onclick="downloadCapture()" disabled>
-						<%:下载文件%>
-					</button>
-					<button id="btn-delete" class="tcpdump-btn tcpdump-btn-delete" onclick="deleteCapture()" disabled>
-						<%:删除文件%>
-					</button>
-				</div>
+				<button id="btn-start" class="cbi-button cbi-button-apply" onclick="startCapture()">
+					<%:开始捕获%>
+				</button>
+				<button id="btn-stop" class="cbi-button cbi-button-remove" onclick="stopCapture()" disabled>
+					<%:停止捕获%>
+				</button>
+				<button id="btn-download" class="cbi-button cbi-button-neutral" onclick="downloadCapture()" disabled>
+					<%:下载文件%>
+				</button>
+				<button id="btn-delete" class="cbi-button cbi-button-remove" onclick="deleteCapture()" disabled>
+					<%:删除文件%>
+				</button>
 			</div>
 		</div>
 	</fieldset>
-
-	<div class="dialog-overlay" id="dialog-overlay" onclick="closeAdvancedFilterDialog()"></div>
-	<div class="advanced-filter-dialog" id="advanced-filter-dialog">
-		<span class="close-dialog" onclick="closeAdvancedFilterDialog()">&times;</span>
-		<h3><%:高级过滤器%></h3>
-		<p><%:常用过滤器示例:%></p>
-		<ul>
-			<li>host 192.168.1.1 - <%:捕获特定主机的流量%></li>
-			<li>net 192.168.1.0/24 - <%:捕获特定网络的流量%></li>
-			<li>portrange 80-100 - <%:捕获端口范围的流量%></li>
-			<li>tcp or udp - <%:捕获TCP或UDP流量%></li>
-			<li>src host 192.168.1.1 - <%:源地址过滤%></li>
-			<li>dst host 192.168.1.1 - <%:目标地址过滤%></li>
-		</ul>
-		<p><%:在上方输入框中输入BPF过滤器表达式%></p>
-	</div>
 </div>
 
 <script type="text/javascript">
@@ -170,24 +141,20 @@ function formatFileSize(bytes) {
 
 function showNotification(message, type) {
     const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
+    notification.className = `cbi-tooltip cbi-tooltip-${type === 'success' ? 'success' : 'error'}`;
     notification.textContent = message;
     Object.assign(notification.style, {
         position: 'fixed',
-        top: '20px',
-        right: '20px',
-        padding: '10px 20px',
-        borderRadius: '4px',
-        color: 'white',
-        zIndex: '10000',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
-        animation: 'slideIn 0.3s ease-out'
+        top: '10px',
+        right: '10px',
+        display: 'block',
+        zIndex: 1000
     });
-    if (type === 'success') notification.style.backgroundColor = '#28a745';
-    else if (type === 'error') notification.style.backgroundColor = '#dc3545';
-    else notification.style.backgroundColor = '#17a2b8';
     document.body.appendChild(notification);
-    setTimeout(() => document.body.removeChild(notification), 3000);
+    setTimeout(() => {
+        notification.style.display = 'none';
+        document.body.removeChild(notification);
+    }, 3000);
 }
 
 async function apiCall(url, options = {}) {
@@ -239,16 +206,15 @@ async function updateStatus() {
 }
 
 function updateUI(data) {
-    const statusLight = document.getElementById('status-light');
     const statusText = document.getElementById('status-text');
     const fileSizeDisplay = document.getElementById('file-size');
 
     if (data.running) {
-        statusLight.className = 'status-indicator status-running';
         statusText.textContent = '<%:正在捕获...%>';
+        statusText.style.color = '#39b54a';
     } else {
-        statusLight.className = 'status-indicator status-stopped';
         statusText.textContent = '<%:未运行%>';
+        statusText.style.color = '#d9534f';
     }
     fileSizeDisplay.textContent = formatFileSize(data.file_size);
 
@@ -257,11 +223,11 @@ function updateUI(data) {
     var brouteStatus = document.getElementById('broute-status');
 
     if (data.ebtables_installed) {
-        advancedSettings.style.display = 'block';
+        advancedSettings.style.display = '';
         brouteToggle.checked = data.broute_enabled;
         brouteToggle.disabled = data.running;
         brouteStatus.textContent = data.broute_enabled ? '<%:已开启%>' : '<%:已关闭%>';
-        brouteStatus.className = data.broute_enabled ? 'status-running' : 'status-stopped';
+        brouteStatus.style.color = data.broute_enabled ? '#39b54a' : '#d9534f';
     } else {
         advancedSettings.style.display = 'none';
     }
@@ -270,6 +236,11 @@ function updateUI(data) {
     document.getElementById('btn-stop').disabled = !data.running;
     document.getElementById('btn-download').disabled = !data.file_exists || data.running;
     document.getElementById('btn-delete').disabled = !data.file_exists || data.running;
+}
+
+// 新增的辅助函数，用于直接设置过滤器内容
+function setFilter(filterText) {
+    document.getElementById('filter').value = filterText;
 }
 
 function addPortFilter(port) {
@@ -286,16 +257,6 @@ function addPortFilter(port) {
     }
 }
 
-function showAdvancedFilterDialog() {
-    document.getElementById('advanced-filter-dialog').style.display = 'block';
-    document.getElementById('dialog-overlay').style.display = 'block';
-}
-
-function closeAdvancedFilterDialog() {
-    document.getElementById('advanced-filter-dialog').style.display = 'none';
-    document.getElementById('dialog-overlay').style.display = 'none';
-}
-
 async function validateInputs() {
     const iface = document.getElementById('interface').value;
     if (!iface) {
@@ -303,9 +264,8 @@ async function validateInputs() {
         return false;
     }
     const filter = document.getElementById('filter').value;
-    // Simple client-side check, robust check is on the backend
-    if (filter.match(/[;&|`$()]/)) {
-        showNotification('<%:过滤器包含无效字符%>', 'error');
+    if (/[;&|`$()<>\\]/.test(filter)) {
+        showNotification('<%:过滤器包含无效或危险字符%>', 'error');
         return false;
     }
     return true;
@@ -338,7 +298,6 @@ async function stopCapture() {
     btn.disabled = true;
     btn.textContent = '<%:停止中...%>';
     
-    // The backend's stop action will handle broute cleanup reliably.
     const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "stop")%>', { method: 'POST' });
     
     if (result) showNotification(result.message, result.success ? 'success' : 'error');
@@ -346,20 +305,14 @@ async function stopCapture() {
     setTimeout(updateStatus, 500);
 }
 
-async function downloadCapture() {
-    // This method is robust for triggering downloads.
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = '<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "download")%>';
-    document.body.appendChild(iframe);
-    setTimeout(() => document.body.removeChild(iframe), 1000);
+function downloadCapture() {
+    window.location.href = '<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "download")%>';
 }
 
 async function deleteCapture() {
     if (!confirm('<%:确定要删除捕获文件吗？此操作不可撤销。%>')) return;
     const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "delete")%>', { method: 'POST' });
     if (result) showNotification(result.message, result.success ? 'success' : 'error');
-    // After deletion, immediately update status to reflect file non-existence
     updateStatus();
 }
 
@@ -369,13 +322,12 @@ async function toggleBridgeTap() {
     toggle.disabled = true;
     const result = await apiCall('<%=luci.dispatcher.build_url("admin", "services", "tcpdump", "broute")%>?enable=' + enable);
     if (result) showNotification(result.message, result.success ? 'success' : 'error');
-    // Always call updateStatus to get the authoritative state from backend
     updateStatus();
 }
 
 document.addEventListener('DOMContentLoaded', function() {
     loadInterfaces();
-    updateStatus(); // Initial status check
+    updateStatus();
     setInterval(updateStatus, tcpdumpState.updateInterval);
 });
 //]]>
