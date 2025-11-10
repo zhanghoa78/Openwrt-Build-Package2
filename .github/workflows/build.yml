@@ -14,8 +14,8 @@ jobs:
     env:
       # 将包名定义为环境变量，方便引用
       PACKAGE_NAME: luci-app-tcpdump
-      # 从 SDK URL 中提取一个可用于缓存的键值
-      SDK_KEY: ${{ hashFiles(github.event.inputs.sdk_url) }}
+      # ✅ 已修正：直接使用 URL 字符串作为唯一标识符
+      SDK_URL_STRING: ${{ github.event.inputs.sdk_url }}
 
     steps:
       # 步骤 1：检出当前仓库代码
@@ -52,17 +52,16 @@ jobs:
           path: |
             sdk/dl
             sdk/feeds
-          # 使用 SDK 的 URL 哈希作为缓存键的一部分，确保不同 SDK 使用不同缓存
-          key: ${{ runner.os }}-openwrt-${{ env.SDK_KEY }}-${{ hashFiles('sdk/feeds.conf.default') }}
+          # ✅ 已修正：使用正确的 SDK_URL_STRING 变量
+          key: ${{ runner.os }}-openwrt-${{ env.SDK_URL_STRING }}-${{ hashFiles('sdk/feeds.conf.default') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.SDK_KEY }}-
+            ${{ runner.os }}-openwrt-${{ env.SDK_URL_STRING }}-
 
       # 步骤 5：复制插件并更新 feeds
       - name: 🔄 复制插件并更新 feeds
         working-directory: ./sdk
         run: |
           # 将插件复制到 package/custom 目录
-          # 这个命令假设你的仓库根目录就是 luci-app-tcpdump 目录
           mkdir -p package/custom
           cp -r $GITHUB_WORKSPACE package/custom/${{ env.PACKAGE_NAME }}
           
@@ -80,7 +79,6 @@ jobs:
           cp .config.old .config || make defconfig
           
           # 使用 OpenWrt 的脚本来启用包和它的依赖
-          # 'm' 表示编译成模块 (ipk), 'y' 表示编译进固件
           echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m" >> .config
           
           # 让编译系统自动处理依赖
@@ -107,3 +105,4 @@ jobs:
           # 优化路径，只上传我们自己编译的包和它的直接依赖
           path: sdk/bin/packages/**/custom/*.ipk
           if-no-files-found: error
+
