@@ -14,11 +14,9 @@ end
 -- 获取网络接口列表
 function action_interfaces()
     local http = require "luci.http"
-    -- 使用 'luci.util' 而不是 'luci.sys'
-    local util = require "luci.util" 
+    local util = require "luci.util"
 
     local interfaces = {}
-    -- 使用 util.exec，它返回一个字符串
     local list = util.exec("ls /sys/class/net/ 2>/dev/null")
 
     if list and list ~= "" then
@@ -55,22 +53,44 @@ local function format_file_size(bytes)
     return string.format("%.2f %s", size, sizes[i])
 end
 
+-- 内部辅助函数：获取 tcpdump 进程的 PID
+-- 返回匹配到特定命令行参数的 tcpdump 进程的 PID 列表
+-- 注意：ps w 在 OpenWrt Busybox 下可能只会显示部分参数，但 -w /tmp/tcpdump.pcap 通常可见
+local function get_tcpdump_pids_for_our_capture()
+    local util = require "luci.util"
+    local pids_str = util.exec("ps w | grep '[t]cpdump ' | grep -- '-w /tmp/tcpdump.pcap' | grep -v 'grep' | awk '{print $1}'")
+    local pids = {}
+    if pids_str and pids_str ~= "" then
+        for pid_s in pids_str:gmatch("%d+") do
+            table.insert(pids, tonumber(pid_s))
+        end
+    end
+    return pids
+end
+
 -- 内部停止函数（仅停止 tcpdump 进程）
 local function action_stop_internal()
     local util = require "luci.util"
-    
-    -- 停止 tcpdump 进程
+    -- Step 1: 尝试使用 killall 停止所有名为 tcpdump 的进程 (可能不精确，但作为第一层尝试无害)
     util.exec("killall tcpdump 2>/dev/null")
-    util.exec("pkill -f 'tcpdump.*-w /tmp/tcpdump.pcap' 2>/dev/null")
-    util.exec("sleep 0.5")
-    
-    local running = util.exec("ps | grep '[t]cpdump '")
-    if running and running ~= "" then
-        util.exec("killall -9 tcpdump 2>/dev/null")
-        util.exec("pkill -9 -f 'tcpdump.*-w /tmp/tcpdump.pcap' 2>/dev/null")
-        util.exec("sleep 0.5")
+    util.exec("sleep 0.5") -- 给予 killall 一个基本的响应时间
+    -- Step 2: 更精确地找到并停止捕获到 /tmp/tcpdump.pcap 的 tcpdump 进程
+    local pids_to_kill = get_tcpdump_pids_for_our_capture()
+    if #pids_to_kill > 0 then
+        local pids_str = table.concat(pids_to_kill, " ")
+        -- 尝试发送 SIGTERM (优雅关闭信号)
+        util.exec("kill " .. pids_str .. " 2>/dev/null")
+        util.exec("sleep 1.5") -- **延长等待时间**，给进程足够时间完成清理和退出
+        -- Step 3: 再次检查，如果仍有进程在运行，则发送 SIGKILL (强制关闭信号)
+        pids_to_kill = get_tcpdump_pids_for_our_capture()
+        if #pids_to_kill > 0 then
+            pids_str = table.concat(pids_to_kill, " ")
+            util.exec("kill -9 " .. pids_str .. " 2>/dev/null")
+            util.exec("sleep 0.5") -- SIGKILL 后，只需短暂等待系统状态更新
+        end
     end
 end
+
 
 -- 清理抓包文件（只删文件）
 local function cleanup_capture_files()
@@ -83,7 +103,7 @@ function action_ajax_status()
     local util = require "luci.util"
     local nixio = require "nixio"
     local http = require "luci.http"
-    
+
     local result = {
         running = false,
         file_exists = false,
@@ -92,7 +112,7 @@ function action_ajax_status()
         pid = nil,
         interface = nil
     }
-    
+
     local status, err = pcall(function()
         -- 检查进程
         local ps_output = util.exec("ps w | grep '[t]cpdump ' | grep -- '-w /tmp/tcpdump.pcap' | head -1")
@@ -107,7 +127,7 @@ function action_ajax_status()
                 end
             end
         end
-        
+
         -- 检查主抓包文件
         local file = "/tmp/tcpdump.pcap"
         local stat = nixio.fs.stat(file)
@@ -117,11 +137,11 @@ function action_ajax_status()
             result.file_size_human = format_file_size(stat.size)
         end
     end)
-    
+
     if not status then
         result.error = tostring(err)
     end
-    
+
     http.prepare_content("application/json")
     http.write_json(result)
 end
@@ -131,10 +151,15 @@ local function validate_filter(filter)
     if not filter or filter == "" then
         return true
     end
-    if filter:match("[;&|$`]") then
+    -- 这是一个更安全的过滤器验证方式，不允许 shell 注入，
+    -- 但仍然允许 tcpdump 过滤器语法中的常见字符。
+    -- 注意：这不是一个完整的 tcpdump 过滤器语法解析器，
+    -- 主要目的是防止用户注入恶意 shell 命令。
+    if filter:match("[;&|$`\t\n\r]") then -- 增加制表符和换行符检查
         return false
     end
-    return filter:match("^[%w%s%|&!%=%>%<%(%):%/%-%*%.%[%]',]+$") ~= nil
+    -- 允许字母数字、空格、常见的符号（用于协议、端口、方向等）
+    return filter:match("^[A-Za-z0-9%s%p_.:/-]+$") ~= nil
 end
 
 -- 启动抓包 (已移除文件大小限制)
@@ -142,49 +167,48 @@ function action_start()
     local http = require "luci.http"
     local util = require "luci.util"
     local nixio = require "nixio"
-    
+
     local interface = http.formvalue("interface")
     local filter = http.formvalue("filter") or ""
-    -- local filesize = http.formvalue("filesize") or "" -- 已移除
     local count = http.formvalue("count") or ""
-    
+
     -- 输入验证
     if not interface or interface == "" then
         http.prepare_content("application/json")
         http.write_json({success = false, message = "请选择网络接口"})
         return
     end
-    
-    if not interface:match("^[%w%-_%.]+$") then
+
+    if not interface:match("^[A-Za-z0-9%-_%.]+$") then -- 接口名通常只包含字母数字、下划线、短横线、点
         http.prepare_content("application/json")
         http.write_json({success = false, message = "无效的接口名称"})
         return
     end
-    
+
     if not nixio.fs.stat("/sys/class/net/" .. interface) then
         http.prepare_content("application/json")
         http.write_json({success = false, message = "网络接口不存在"})
         return
     end
-    
+
     if not validate_filter(filter) then
         http.prepare_content("application/json")
-        http.write_json({success = false, message = "无效的过滤器格式"})
+        http.write_json({success = false, message = "无效的过滤器格式，请避免使用特殊字符（如; & | $ `）"})
         return
     end
-    
+
     -- 停止现有进程并清理文件
     action_stop_internal()
     cleanup_capture_files()
-    
+
     -- 构建 tcpdump 命令
     local cmd_parts = {
         "tcpdump",
         "-i", interface,
         "-w", "/tmp/tcpdump.pcap",
-        "-U"
+        "-U" -- 将数据包写入文件而不进行缓冲
     }
-    
+
     local message_parts = {}
 
     -- 1. 包数量限制 (tcpdump 原生支持)
@@ -196,28 +220,23 @@ function action_start()
             table.insert(message_parts, "捕获 " .. count .. " 个包后停止")
         end
     end
-    
-    -- 2. 文件大小限制 (已移除)
-    
+
     if filter ~= "" then
         table.insert(cmd_parts, filter)
     end
-    
+
     -- 启动 tcpdump
+    -- 为了更鲁棒地在后台运行，并减少僵尸进程，使用 nohup 和 disown
+    -- 但在 LuCI 的 RPC 环境中直接 & 通常已足够，因为 luci-fcgi/uwsgi 不会作为父进程等待
     local cmd = table.concat(cmd_parts, " ") .. " 2>/dev/null &"
     os.execute(cmd)
-    
-    util.exec("sleep 1")
-    
-    -- 检查是否启动成功并获取 PID
-    local ps_output = util.exec("ps w | grep '[t]cpdump ' | grep -- '-w /tmp/tcpdump.pcap' | head -1")
-    local pid = nil
-    if ps_output and ps_output ~= "" then
-        pid = ps_output:match("^%s*(%d+)")
-    end
 
-    local success = (pid ~= nil)
-    
+    util.exec("sleep 1")
+
+    -- 检查是否启动成功并获取 PID
+    local pids_after_start = get_tcpdump_pids_for_our_capture()
+    local success = (#pids_after_start > 0)
+
     http.prepare_content("application/json")
     if success then
         local message = "TCPDump 启动成功"
@@ -226,7 +245,7 @@ function action_start()
         else
             message = message .. " (请手动停止)"
         end
-        http.write_json({success = true, message = message})
+        http.write_json({success = true, message = message, pid = pids_after_start[1]})
     else
         local error_detail = ""
         if not util.exec("which tcpdump") then
@@ -235,7 +254,7 @@ function action_start()
              error_detail = "进程启动失败，请检查接口或过滤器"
         end
         http.write_json({
-            success = false, 
+            success = false,
             message = "TCPDump 启动失败: " .. error_detail
         })
     end
@@ -245,20 +264,20 @@ end
 function action_stop()
     local http = require "luci.http"
     local util = require "luci.util"
-    
+
     local result = {success = true, message = ""}
-    
+
     -- 只停止进程，不删除文件
     action_stop_internal()
-    
-    local running = util.exec("ps | grep '[t]cpdump '")
-    if running and running ~= "" then
+
+    local pids_still_running = get_tcpdump_pids_for_our_capture()
+    if #pids_still_running > 0 then
         result.success = false
-        result.message = "无法停止 tcpdump 进程"
+        result.message = "无法完全停止 tcpdump 进程，可能需要手动干预（PID: " .. table.concat(pids_still_running, ", ") .. "）"
     else
         result.message = "抓包已停止，文件已保存可供下载"
     end
-    
+
     http.prepare_content("application/json")
     http.write_json(result)
 end
@@ -267,29 +286,29 @@ end
 function action_download()
     local http = require "luci.http"
     local nixio = require "nixio"
-    
+
     local file_path = "/tmp/tcpdump.pcap"
     local stat = nixio.fs.stat(file_path)
-    
+
     if not stat then
         http.status(404, "Not Found")
         http.prepare_content("text/plain")
         http.write("抓包文件不存在")
         return
     end
-    
+
     if stat.size == 0 then
         http.status(400, "Bad Request")
         http.prepare_content("text/plain")
         http.write("抓包文件为空")
         return
     end
-    
+
     local file = io.open(file_path, "rb")
     if file then
         local content = file:read("*a")
         file:close()
-        
+
         http.header('Content-Type', 'application/vnd.tcpdump.pcap')
         http.header('Content-Disposition', 'attachment; filename="tcpdump_' .. os.date("%Y%m%d_%H%M%S") .. '.pcap"')
         http.header('Content-Length', tostring(#content))
@@ -305,15 +324,15 @@ function action_delete()
     local nixio = require "nixio"
     local http = require "luci.http"
     local util = require "luci.util"
-    
+
     local result = {success = false, message = "操作失败"}
-    
+
     -- 先停止所有相关进程
     action_stop_internal()
-    
+
     -- 然后删除文件
     cleanup_capture_files()
-    
+
     local stat = nixio.fs.stat("/tmp/tcpdump.pcap")
     if not stat then
         result.success = true
@@ -321,7 +340,7 @@ function action_delete()
     else
         result.message = "无法删除文件"
     end
-    
+
     http.prepare_content("application/json")
     http.write_json(result)
 end
