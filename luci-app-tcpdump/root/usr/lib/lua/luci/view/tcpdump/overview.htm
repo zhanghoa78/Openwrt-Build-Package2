@@ -1,6 +1,59 @@
 <%+header%>
 
-<!-- 移除外部 CSS 引入 -->
+<!-- 页面样式 -->
+<style type="text/css">
+/* 状态指示器样式 */
+.status-indicator-general {
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+/* 确保信息元素不被挤压 */
+#interface-info, #file-size-info {
+    white-space: nowrap;
+    margin-left: 10px;
+    padding: 3px 8px;
+    background-color: #f5f5f5;
+    border-radius: 3px;
+    border: 1px solid #e0e0e0;
+}
+
+/* 端口选择按钮样式 */
+.filter-preset-btn, .filter-preset-group-btn {
+    /* 未选中状态 - 浅色 */
+    background-color: #1014f359;
+    color: #666666;
+    border: 1px solid #d0d0d0;
+    transition: all 0.2s ease;
+    padding: 8px 12px;
+    border-radius: 4px;
+}
+
+.filter-preset-btn.active, .filter-preset-group-btn.active,
+.filter-preset-btn.cbi-button-highlight, .filter-preset-group-btn.cbi-button-highlight {
+    /* 选中状态 - 深色 */
+    background-color: #080ce2c4;
+    color: #ffffff;
+    border: 1px solid #d0d0d0;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.15);
+    font-weight: bold;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    #status-text {
+        display: block;
+        margin-bottom: 5px;
+    }
+    
+    #interface-info, #file-size-info {
+        margin-left: 0;
+        margin-right: 5px;
+        margin-bottom: 5px;
+    }
+}
+</style>
 
 <div class="cbi-map">
 	<h2 name="content"><%:TCPDump 数据包捕获%></h2>
@@ -141,51 +194,40 @@ function formatFileSize(bytes) {
 }
 
 // ------------------------------------------------
-// 通知系统 (根据OpenWrt默认样式进行微调)
+// 页面状态显示系统
 // ------------------------------------------------
 function showNotification(message, type) {
-    var existingNotice = document.querySelector('.tcpdump-notice');
-    if (existingNotice) {
-        existingNotice.remove();
+    var statusArea = document.getElementById('status-message-area');
+    if (!statusArea) {
+        // 如果状态区域不存在，创建一个
+        statusArea = document.createElement('div');
+        statusArea.id = 'status-message-area';
+        statusArea.className = 'cbi-section';
+        statusArea.style.cssText = `
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            transition: background-color 0.3s ease;
+        `;
+        
+        var mainContent = document.querySelector('.cbi-map');
+        if (mainContent) {
+            mainContent.insertBefore(statusArea, mainContent.firstChild);
+        }
     }
     
-    var notice = document.createElement('div');
-    notice.className = 'tcpdump-notice alert-message ' + 
-        (type === 'error' ? 'error' : type === 'success' ? 'success' : 'info');
+    // 设置状态区域样式和内容
+    statusArea.className = 'cbi-section ' + 
+        (type === 'error' ? 'cbi-section-error' : type === 'success' ? 'cbi-section-success' : 'cbi-section-info');
     
-    notice.innerHTML = '<p>' + message + '</p>';
-    notice.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        z-index: 10000;
-        min-width: 300px;
-        max-width: 500px;
-        padding: 15px;
-        border-radius: 4px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        animation: slideIn 0.3s ease forwards;
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-        @keyframes slideOut {
-            from { transform: translateX(0); opacity: 1; }
-            to { transform: translateX(100%); opacity: 0; }
-        }
-    `;
+    statusArea.innerHTML = '<p class="cbi-value-title">' + 
+        (type === 'error' ? '<%:错误%>' : type === 'success' ? '<%:成功%>' : '<%:信息%>') + 
+        '</p><p class="cbi-value-description">' + message + '</p>';
     
-    document.body.appendChild(notice);
-    
-    setTimeout(function() {
-        if (notice.parentNode) {
-            notice.style.animation = 'slideOut 0.3s ease forwards';
-            setTimeout(function() {
-                if (notice.parentNode) {
-                    notice.remove();
-                }
-            }, 300);
-        }
+    // 5秒后自动清除消息（如果没有新消息）
+    clearTimeout(window.statusMessageTimeout);
+    window.statusMessageTimeout = setTimeout(function() {
+        statusArea.innerHTML = '';
     }, 5000);
 }
 
@@ -297,62 +339,150 @@ function setupPortSelector() {
     });
 }
 // ------------------------------------------------
-// 高级过滤器构建器 (样式调整以适应基本主题)
+// 高级过滤器构建器 (优化版)
 // ------------------------------------------------
 function showAdvancedFilterDialog() {
     var filterInput = document.getElementById('filter');
     
+    // 解析当前过滤器值以预填充高级过滤表单
+    function parseCurrentFilter() {
+        var currentFilter = filterInput.value.trim();
+        var result = { host: '', protocol: '', port: '', network: '' };
+        
+        if (!currentFilter) return result;
+        
+        // 简单解析当前过滤器值（实际实现可能需要更复杂的解析逻辑）
+        if (currentFilter.match(/\bhost\s+([^\s]+)/i)) {
+            result.host = currentFilter.match(/\bhost\s+([^\s]+)/i)[1];
+        }
+        
+        ['tcp', 'udp', 'icmp', 'arp'].forEach(protocol => {
+            if (currentFilter.match(new RegExp(`\\b${protocol}\\b`, 'i'))) {
+                result.protocol = protocol;
+            }
+        });
+        
+        if (currentFilter.match(/\bportrange\s+([^\s]+)/i)) {
+            result.port = currentFilter.match(/\bportrange\s+([^\s]+)/i)[1];
+        } else if (currentFilter.match(/\bport\s+([^\s,]+)/i)) {
+            // 提取单个或多个端口
+            var ports = currentFilter.match(/\bport\s+([^\s,]+)/ig) || [];
+            ports = ports.map(p => p.replace(/^port\s+/i, ''));
+            result.port = ports.join(', ');
+        }
+        
+        if (currentFilter.match(/\bnet\s+([^\s]+)/i)) {
+            result.network = currentFilter.match(/\bnet\s+([^\s]+)/i)[1];
+        }
+        
+        return result;
+    }
+    
+    var currentFilterValues = parseCurrentFilter();
+    
+    // 创建或获取高级过滤器区域
+    var filterArea = document.getElementById('advanced-filter-area');
+    if (!filterArea) {
+        filterArea = document.createElement('div');
+        filterArea.id = 'advanced-filter-area';
+        filterArea.className = 'cbi-section';
+        
+        var mainContent = document.querySelector('.cbi-map');
+        if (mainContent) {
+            // 将高级过滤器区域插入到适当位置
+            var statusSection = document.querySelector('fieldset.cbi-section:has(legend)');
+            if (statusSection) {
+                mainContent.insertBefore(filterArea, statusSection.nextSibling);
+            } else {
+                mainContent.appendChild(filterArea);
+            }
+        }
+    }
+    
+    // 确保区域可见
+    filterArea.style.display = 'block';
+    
     var dialogHtml = `
-        <div class="advanced-filter-dialog" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;">
-            <div class="cbi-map" style="background: white; padding: 20px; border-radius: 8px; width: 500px; max-width: 90%;">
-                <h3><%:高级过滤器构建器%></h3>
-                <div class="cbi-value">
-                    <label class="cbi-value-title"><%:主机/IP地址:%></label>
-                    <div class="cbi-value-field">
-                        <input type="text" id="adv-host" class="cbi-input-text" style="width: 100%;" placeholder="例如: 192.168.1.1 或 host example.com">
+<div style="background: white; padding: 24px; border-radius: 8px; width: 100%; box-sizing: border-box;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px;">
+                    <h3 style="margin: 0; color: #333;"><%:高级过滤器构建器%></h3>
+                    <button type="button" class="cbi-button" style="padding: 5px 10px;" onclick="closeAdvancedFilter()">
+                        &times;
+                    </button>
+                </div>
+                
+                <!-- 过滤条件预览区域 -->
+                <div style="background-color: #f5f5f5; border-radius: 4px; padding: 12px; margin-bottom: 20px; font-family: monospace;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                        <strong style="color: #555;"><%:当前过滤器:%></strong>
+                        <button type="button" id="btn-clear-filter" class="cbi-button" style="padding: 2px 8px; font-size: 0.9em;">
+                            <%:清除%>
+                        </button>
+                    </div>
+                    <div id="filter-preview" style="color: #333; min-height: 20px; word-break: break-all;">
+                        ${currentFilterValues.host || currentFilterValues.protocol || currentFilterValues.port || currentFilterValues.network 
+                            ? filterInput.value : '<%:无过滤条件%>'}
                     </div>
                 </div>
-                <div class="cbi-value">
-                    <label class="cbi-value-title"><%:协议:%></label>
-                    <div class="cbi-value-field">
-                        <select id="adv-protocol" class="cbi-input-select" style="width: 100%;">
-                            <option value=""><%:所有协议%></option>
-                            <option value="tcp">TCP</option>
-                            <option value="udp">UDP</option>
-                            <option value="icmp">ICMP</option>
-                            <option value="arp">ARP</option>
-                        </select>
+                
+                <!-- 输入字段区域 -->
+                <div style="display: grid; grid-template-columns: 1fr; gap: 16px;">
+                    <div class="cbi-value" style="margin-bottom: 0;">
+                        <label class="cbi-value-title" style="margin-bottom: 6px; display: inline-block;"><%:主机/IP地址:%></label>
+                        <div class="cbi-value-field">
+                            <input type="text" id="adv-host" class="cbi-input-text" style="width: 100%; padding: 8px; border-radius: 4px;" 
+                                placeholder="例如: 192.168.1.1 或 example.com" value="${currentFilterValues.host || ''}">
+                            <div style="font-size: 0.9em; color: #666; margin-top: 4px;"><%:指定要过滤的主机或域名%></div>
+                        </div>
+                    </div>
+                    
+                    <div class="cbi-value" style="margin-bottom: 0;">
+                        <label class="cbi-value-title" style="margin-bottom: 6px; display: inline-block;"><%:协议:%></label>
+                        <div class="cbi-value-field">
+                            <select id="adv-protocol" class="cbi-input-select" style="width: 100%; padding: 8px; border-radius: 4px;">
+                                <option value=""><%:所有协议%></option>
+                                <option value="tcp" ${currentFilterValues.protocol === 'tcp' ? 'selected' : ''}>TCP</option>
+                                <option value="udp" ${currentFilterValues.protocol === 'udp' ? 'selected' : ''}>UDP</option>
+                                <option value="icmp" ${currentFilterValues.protocol === 'icmp' ? 'selected' : ''}>ICMP</option>
+                                <option value="arp" ${currentFilterValues.protocol === 'arp' ? 'selected' : ''}>ARP</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="cbi-value" style="margin-bottom: 0;">
+                        <label class="cbi-value-title" style="margin-bottom: 6px; display: inline-block;"><%:端口:%></label>
+                        <div class="cbi-value-field">
+                            <input type="text" id="adv-port" class="cbi-input-text" style="width: 100%; padding: 8px; border-radius: 4px;" 
+                                placeholder="例如: 80, 443 或 1-1024" value="${currentFilterValues.port || ''}">
+                            <div style="font-size: 0.9em; color: #666; margin-top: 4px;"><%:使用逗号分隔多个端口，或使用连字符指定端口范围%></div>
+                        </div>
+                    </div>
+                    
+                    <div class="cbi-value" style="margin-bottom: 0;">
+                        <label class="cbi-value-title" style="margin-bottom: 6px; display: inline-block;"><%:网络段:%></label>
+                        <div class="cbi-value-field">
+                            <input type="text" id="adv-network" class="cbi-input-text" style="width: 100%; padding: 8px; border-radius: 4px;" 
+                                placeholder="例如: 192.168.1.0/24" value="${currentFilterValues.network || ''}">
+                            <div style="font-size: 0.9em; color: #666; margin-top: 4px;"><%:使用CIDR表示法指定网络范围%></div>
+                        </div>
                     </div>
                 </div>
-                <div class="cbi-value">
-                    <label class="cbi-value-title"><%:端口:%></label>
-                    <div class="cbi-value-field">
-                        <input type="text" id="adv-port" class="cbi-input-text" style="width: 100%;" placeholder="例如: 80, 443, 或 1-1024">
-                    </div>
-                </div>
-                <div class="cbi-value cbi-value-last">
-                    <label class="cbi-value-title"><%:网络段:%></label>
-                    <div class="cbi-value-field">
-                        <input type="text" id="adv-network" class="cbi-input-text" style="width: 100%;" placeholder="例如: 192.168.1.0/24">
-                    </div>
-                </div>
-                <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                
+                <!-- 按钮区域 -->
+                <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee;">
                     <button type="button" class="cbi-button" onclick="closeAdvancedFilter()"><%:取消%></button>
+                    <button type="button" class="cbi-button" id="btn-reset-filter" style="margin-right: auto;"><%:重置%></button>
                     <button type="button" class="cbi-button cbi-button-apply" onclick="applyAdvancedFilter()"><%:应用%></button>
                 </div>
             </div>
         </div>
     `;
     
-    var dialog = document.createElement('div');
-    dialog.innerHTML = dialogHtml;
-    document.body.appendChild(dialog);
+    // 将内容设置到页面中的高级过滤器区域
+    filterArea.innerHTML = dialogHtml;
     
-    window.closeAdvancedFilter = function() {
-        dialog.remove();
-    };
-    
-    window.applyAdvancedFilter = function() {
+    // 更新过滤器预览
+    function updateFilterPreview() {
         var host = document.getElementById('adv-host').value;
         var protocol = document.getElementById('adv-protocol').value;
         var port = document.getElementById('adv-port').value;
@@ -384,10 +514,101 @@ function showAdvancedFilterDialog() {
         }
         
         var finalFilter = filterParts.join(' and ');
-        filterInput.value = finalFilter;
-        filterInput.dispatchEvent(new Event('input', { bubbles: true }));
-        dialog.remove();
-    };
+        document.getElementById('filter-preview').textContent = finalFilter || '<%:无过滤条件%>';
+    }
+    
+    // 添加输入事件监听器以实时更新预览
+    document.getElementById('adv-host').addEventListener('input', updateFilterPreview);
+    document.getElementById('adv-protocol').addEventListener('change', updateFilterPreview);
+    document.getElementById('adv-port').addEventListener('input', updateFilterPreview);
+    document.getElementById('adv-network').addEventListener('input', updateFilterPreview);
+    
+    // 清除所有过滤条件
+    document.getElementById('btn-clear-filter').addEventListener('click', function() {
+        document.getElementById('adv-host').value = '';
+        document.getElementById('adv-protocol').value = '';
+        document.getElementById('adv-port').value = '';
+        document.getElementById('adv-network').value = '';
+        updateFilterPreview();
+    });
+    
+    // 重置按钮功能
+    document.getElementById('btn-reset-filter').addEventListener('click', function() {
+        document.getElementById('adv-host').value = currentFilterValues.host || '';
+        document.getElementById('adv-protocol').value = currentFilterValues.protocol || '';
+        document.getElementById('adv-port').value = currentFilterValues.port || '';
+        document.getElementById('adv-network').value = currentFilterValues.network || '';
+        updateFilterPreview();
+    });
+    
+    // 点击背景关闭弹窗 (修复：使用filterArea而不是未定义的dialog)
+    filterArea.addEventListener('click', function(e) {
+        if (e.target === filterArea) {
+            closeAdvancedFilter();
+        }
+    });
+    
+    // ESC键关闭弹窗
+    document.addEventListener('keydown', function escapeHandler(e) {
+        if (e.key === 'Escape') {
+            closeAdvancedFilter();
+            document.removeEventListener('keydown', escapeHandler);
+        }
+    });
+    
+    // 初始化时更新预览
+    updateFilterPreview();
+}
+
+// 修复：将closeAdvancedFilter移到全局作用域
+function closeAdvancedFilter() {
+    var filterArea = document.getElementById('advanced-filter-area');
+    if (filterArea) {
+        filterArea.style.display = 'none';
+    }
+}
+
+// 修复：将applyAdvancedFilter移到全局作用域
+function applyAdvancedFilter() {
+    var filterInput = document.getElementById('filter');
+    var host = document.getElementById('adv-host').value;
+    var protocol = document.getElementById('adv-protocol').value;
+    var port = document.getElementById('adv-port').value;
+    var network = document.getElementById('adv-network').value;
+    
+    var filterParts = [];
+    
+    if (host) {
+        filterParts.push('host ' + host);
+    }
+    
+    if (protocol) {
+        filterParts.push(protocol);
+    }
+    
+    if (port) {
+        if (port.includes('-')) {
+            filterParts.push('portrange ' + port);
+        } else if (port.includes(',')) {
+            var ports = port.split(',').map(p => 'port ' + p.trim()).join(' or ');
+            filterParts.push('(' + ports + ')');
+        } else {
+            filterParts.push('port ' + port);
+        }
+    }
+    
+    if (network) {
+        filterParts.push('net ' + network);
+    }
+    
+    var finalFilter = filterParts.join(' and ');
+    filterInput.value = finalFilter;
+    filterInput.dispatchEvent(new Event('input', { bubbles: true }));
+    
+    // 在页面状态中显示过滤器应用成功
+    showNotification('<%:过滤器已应用%>', 'success');
+    
+    closeAdvancedFilter();
 }
 
 // ------------------------------------------------
@@ -522,11 +743,8 @@ function updateStatus() {
 }
 
 function showStatusError(message) {
-    var statusEl = document.getElementById('status-text');
-    if (statusEl) {
-        statusEl.className = 'cbi-value-description status-indicator-general error';
-        statusEl.innerHTML = '<%:错误:%> ' + message;
-    }
+    // 使用统一的页面状态显示系统
+    showNotification('<%:错误:%> ' + message, 'error');
 }
 
 // ------------------------------------------------
@@ -547,38 +765,56 @@ function updateUI(data) {
     var fileExists = data.file_exists === true;
     var fileSize = data.file_size || 0; // 获取文件大小，如果不存在则默认为0
     
+    // 重置所有信息显示
+    interfaceInfoEl.style.display = 'none';
+    fileSizeInfoEl.style.display = 'none';
+    
     if (isRunning) {
+        // 设置状态文本 - 在状态栏中显示详细信息
         statusEl.className = 'cbi-value-description status-indicator-general success';
-        var statusText = '<%:运行中%>';
-        if (data.pid) statusText += ' (PID: ' + data.pid + ')';
-        statusEl.textContent = statusText;
+        statusEl.textContent = 'TCPDump 启动成功 (请手动停止，文件大小限制: 50.00 MB)';
         
+        // 同时在右侧显示接口和文件大小信息
         if (data.interface) {
-            interfaceInfoEl.style.display = 'inline';
+            interfaceInfoEl.style.display = 'inline-block';
             interfaceInfoEl.textContent = '接口: ' + data.interface;
-        } else {
-            interfaceInfoEl.style.display = 'none';
         }
-
-        // 正在运行中，显示文件大小
         if (fileExists) {
-            fileSizeInfoEl.style.display = 'inline';
+            fileSizeInfoEl.style.display = 'inline-block';
             fileSizeInfoEl.textContent = '文件大小: ' + formatFileSize(fileSize);
-        } else {
-            fileSizeInfoEl.style.display = 'none';
+        }
+        
+        // 使用统一状态系统显示详细信息
+        var statusMessage = 'TCPDump 启动成功';
+        if (data.interface) {
+            statusMessage += ' - 接口: ' + data.interface;
+        }
+        if (fileExists) {
+            statusMessage += ' - 文件大小: ' + formatFileSize(fileSize);
+        }
+        statusMessage += ' - 请手动停止，文件大小限制: 50.00 MB';
+        
+        // 只在状态变化时显示通知
+        if (window.lastStatus !== statusMessage) {
+            showNotification(statusMessage, 'success');
+            window.lastStatus = statusMessage;
         }
 
     } else {
+        // 设置状态文本
         statusEl.className = 'cbi-value-description status-indicator-general';
         statusEl.textContent = '<%:已停止%>';
-        interfaceInfoEl.style.display = 'none';
-
-        // 停止后，如果文件存在，也显示文件大小
+        
+        // 使用统一状态系统显示详细信息
+        var statusMessage = '<%:已停止%>';
         if (fileExists) {
-            fileSizeInfoEl.style.display = 'inline';
-            fileSizeInfoEl.textContent = '文件大小: ' + formatFileSize(fileSize);
-        } else {
-            fileSizeInfoEl.style.display = 'none';
+            statusMessage += ' - 文件大小: ' + formatFileSize(fileSize);
+        }
+        
+        // 只在状态变化时显示通知
+        if (window.lastStatus !== statusMessage) {
+            showNotification(statusMessage, 'info');
+            window.lastStatus = statusMessage;
         }
     }
     
@@ -633,8 +869,9 @@ function startCapture() {
                     showNotification('<%:响应解析失败%>', 'error');
                 }
             } else {
-                showNotification('<%:请求失败: HTTP %> ' + xhr.status, 'error');
+               showNotification('<%:请求失败: HTTP %> ' + xhr.status, 'error');
             }
+            updateStatus();
         }
     };
     
@@ -717,10 +954,34 @@ function downloadCapture() {
 }
 
 function deleteCapture() {
-    if (!confirm('<%:您确定要删除 /tmp/tcpdump.pcap 文件吗？此操作无法撤销。%>')) {
+    // 检查是否已经显示了确认通知
+    if (window.deleteConfirmationVisible) {
+        // 如果已经显示了确认通知，则执行删除操作
+        window.deleteConfirmationVisible = false;
+        proceedWithDelete();
         return;
     }
+    
+    // 显示删除确认通知
+    showNotification('<%:您确定要删除 /tmp/tcpdump.pcap 文件吗？此操作无法撤销。%>\n\n<button id="confirm-delete" class="cbi-button cbi-button-negative">确认删除</button>', 'warning');
+    
+    // 标记确认通知可见
+    window.deleteConfirmationVisible = true;
+    
+    // 为确认按钮添加事件监听器
+    setTimeout(function() {
+        var confirmBtn = document.getElementById('confirm-delete');
+        if (confirmBtn) {
+            confirmBtn.onclick = function() {
+                window.deleteConfirmationVisible = false;
+                proceedWithDelete();
+            };
+        }
+    }, 100);
+}
 
+// 执行删除操作的函数
+function proceedWithDelete() {
     var deleteBtn = document.getElementById('btn-delete');
     if (deleteBtn) {
         deleteBtn.disabled = true;
@@ -733,6 +994,7 @@ function deleteCapture() {
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
             if (deleteBtn) {
+                deleteBtn.disabled = false;
                 deleteBtn.textContent = '<%:删除文件%>';
             }
             setTimeout(updateStatus, 500);
